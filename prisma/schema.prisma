@@ -1,0 +1,971 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ENUMS
+// ════════════════════════════════════════════════════════════════════════════
+
+enum Plan {
+  MICRO
+  PRO
+  BUSINESS
+  EXPERT
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  ACCOUNTANT
+  MANAGER
+  VIEWER
+}
+
+enum DocumentStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  DECLINED
+  PAID
+  PARTIAL
+  OVERDUE
+  CANCELLED
+  CREDITED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CARD
+  CASH
+  CHECK
+  DIRECT_DEBIT
+  PAYPAL
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum EInvoiceFormat {
+  FACTURX_MINIMUM
+  FACTURX_BASIC
+  FACTURX_EN16931
+  FACTURX_EXTENDED
+  UBL
+  CII
+}
+
+// Statuts cycle de vie conformes aux codes PDP français
+enum EInvoiceStatus {
+  PENDING
+  SUBMITTED
+  DELIVERED
+  ACCEPTED
+  REJECTED
+  PAYMENT_RECEIVED
+  ARCHIVED
+  ERROR
+}
+
+enum IntegrationType {
+  STRIPE
+  QONTO
+  CHORUS_PRO
+  PENNYLANE
+  SAGE
+  CEGID
+  YOOZ
+  URSSAF
+  CUSTOM
+}
+
+enum UrssafDeclarationStatus {
+  DRAFT
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+  CORRECTED
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ORGANISATION (TENANT)
+// ════════════════════════════════════════════════════════════════════════════
+
+model Org {
+  id           String    @id @default(cuid())
+  name         String
+  legalName    String?
+  siret        String?
+  siren        String?
+  tvaNumber    String?
+  nafCode      String?
+  rcsNumber    String?
+  legalForm    String?   // SAS, SARL, EI, micro-entrepreneur...
+  capital      Decimal?  @db.Decimal(15, 2)
+
+  address      String?
+  address2     String?
+  city         String?
+  postalCode   String?
+  country      String    @default("FR")
+
+  phone        String?
+  website      String?
+  email        String?
+
+  // Paramètres facturation
+  defaultVatRate      Decimal?  @db.Decimal(5, 2) @default(20)
+  defaultPaymentTerms Int?      @default(30)
+  defaultLatePenalty  String?
+  invoicePrefix       String?   @default("FAC")
+  quotePrefix         String?   @default("DEV")
+  creditNotePrefix    String?   @default("AVO")
+  invoiceCounter      Int       @default(0)
+  quoteCounter        Int       @default(0)
+  creditNoteCounter   Int       @default(0)
+  isMicroEnterprise   Boolean   @default(false)
+  isVatSubject        Boolean   @default(true)
+
+  plan         Plan      @default(MICRO)
+  trialEnds    DateTime?
+  billingEmail String?
+
+  // Facture électronique
+  pdpProvider       String?
+  pdpApiKeyEncrypted String?   // Clé API PDP chiffrée AES-256
+  einvoicingEnabled Boolean   @default(false)
+
+  // Branding
+  logoUrl      String?
+  primaryColor String?   @default("#6d28d9")
+  fontFamily   String?
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  users             User[]
+  sessions          Session[]
+  customers         Customer[]
+  invoices          Invoice[]
+  quotes            Quote[]
+  creditNotes       CreditNote[]
+  payments          Payment[]
+  documents         Document[]
+  integrations      Integration[]
+  webhooks          Webhook[]
+  einvoiceDocs      EInvoiceDocument[]
+  urssafConnections UrssafConnection[]
+  auditLogs         AuditLog[]
+
+  @@index([plan])
+  @@index([siret])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// UTILISATEUR
+// ════════════════════════════════════════════════════════════════════════════
+
+model User {
+  id              String    @id @default(cuid())
+  firstName       String
+  lastName        String
+  email           String    @unique
+  passwordHash    String
+  role            Role      @default(VIEWER)
+  orgId           String
+
+  isVerified      Boolean   @default(false)
+  isMfaEnabled    Boolean   @default(false)
+  mfaSecret       String?   // Chiffré AES-256
+  loginAttempts   Int       @default(0)
+  lockedUntil     DateTime?
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+
+  phone           String?
+  avatarUrl       String?
+  timezone        String?   @default("Europe/Paris")
+  locale          String?   @default("fr")
+
+  notifyInvoicePaid   Boolean @default(true)
+  notifyQuoteAccepted Boolean @default(true)
+  notifyOverdue       Boolean @default(true)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  org                Org               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  sessions           Session[]
+  auditLogs          AuditLog[]
+  verificationTokens VerificationToken[]
+  createdInvoices    Invoice[]         @relation("InvoiceCreatedBy")
+  createdQuotes      Quote[]           @relation("QuoteCreatedBy")
+
+  @@index([email])
+  @@index([orgId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AUTH
+// ════════════════════════════════════════════════════════════════════════════
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  orgId       String
+  token       String   @unique
+  userAgent   String?
+  ipAddress   String?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org         Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+model VerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  type      String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CLIENTS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Customer {
+  id           String   @id @default(cuid())
+  orgId        String
+
+  name         String
+  firstName    String?
+  lastName     String?
+  isCompany    Boolean  @default(true)
+  reference    String?
+
+  siret        String?
+  siren        String?
+  tvaNumber    String?
+  nafCode      String?
+
+  email        String?
+  phone        String?
+  website      String?
+
+  address      String?
+  address2     String?
+  city         String?
+  postalCode   String?
+  country      String   @default("FR")
+
+  deliveryAddress    String?
+  deliveryAddress2   String?
+  deliveryCity       String?
+  deliveryPostalCode String?
+  deliveryCountry    String?
+
+  defaultVatRate      Decimal? @db.Decimal(5, 2)
+  defaultPaymentTerms Int?
+  creditLimit         Decimal? @db.Decimal(15, 2)
+  currency            String   @default("EUR")
+  discount            Decimal? @db.Decimal(5, 2)
+
+  portalEnabled Boolean  @default(false)
+  portalEmail   String?
+
+  // ── Avance immédiate de crédit d'impôt (URSSAF / SAP) ──────────────────
+  urssafSapEnabled     Boolean  @default(false)  // Switch activé par l'utilisateur
+  urssafSapRef         String?                   // Référence URSSAF du client (renseignée manuellement ou via API)
+
+  notes        String?
+  tags         String[]
+  balance      Decimal  @db.Decimal(15, 2) @default(0)
+
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  org          Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contacts     CustomerContact[]
+  invoices     Invoice[]
+  quotes       Quote[]
+  creditNotes  CreditNote[]
+  payments     Payment[]
+
+  @@index([orgId])
+  @@index([email])
+  @@index([siret])
+  @@index([deletedAt])
+}
+
+model CustomerContact {
+  id         String   @id @default(cuid())
+  customerId String
+  firstName  String
+  lastName   String
+  email      String?
+  phone      String?
+  role       String?
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DEVIS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Quote {
+  id           String         @id @default(cuid())
+  orgId        String
+  customerId   String
+  createdById  String
+
+  number       String
+  reference    String?
+
+  issueDate    DateTime       @default(now())
+  validUntil   DateTime?
+  acceptedAt   DateTime?
+  declinedAt   DateTime?
+  convertedAt  DateTime?
+
+  status       DocumentStatus @default(DRAFT)
+
+  title        String?
+  headerNote   String?
+  footerNote   String?
+
+  totalHT      Decimal        @db.Decimal(15, 2) @default(0)
+  totalTVA     Decimal        @db.Decimal(15, 2) @default(0)
+  totalTTC     Decimal        @db.Decimal(15, 2) @default(0)
+  currency     String         @default("EUR")
+  discount     Decimal?       @db.Decimal(5, 2)
+
+  pdfUrl       String?
+  pdfHash      String?
+  designConfig  Json?
+  columnsConfig Json?
+
+  signedAt     DateTime?
+  signedByName String?
+  signedByIp   String?
+  declineReason String?
+
+  deletedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  org          Org            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  customer     Customer       @relation(fields: [customerId], references: [id])
+  createdBy    User           @relation("QuoteCreatedBy", fields: [createdById], references: [id])
+  lines        QuoteLine[]
+  statusHistory QuoteStatusHistory[]
+  invoice      Invoice?       @relation("QuoteToInvoice")
+
+  @@index([orgId])
+  @@index([customerId])
+  @@index([status])
+  @@index([number])
+  @@index([deletedAt])
+}
+
+model QuoteLine {
+  id          String   @id @default(cuid())
+  quoteId     String
+  position    Int
+  designation String
+  description String?
+  reference   String?
+  unit        String?
+  quantity    Decimal  @db.Decimal(10, 3)
+  unitPriceHT Decimal  @db.Decimal(15, 4)
+  vatRate     Decimal  @db.Decimal(5, 2) @default(20)
+  discount    Decimal? @db.Decimal(5, 2)
+  totalHT     Decimal  @db.Decimal(15, 2)
+  totalTTC    Decimal  @db.Decimal(15, 2)
+  customFields Json?
+
+  quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
+}
+
+model QuoteStatusHistory {
+  id        String         @id @default(cuid())
+  quoteId   String
+  status    DocumentStatus
+  note      String?
+  createdAt DateTime       @default(now())
+  createdBy String?
+
+  quote     Quote          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FACTURES
+// ════════════════════════════════════════════════════════════════════════════
+
+model Invoice {
+  id           String         @id @default(cuid())
+  orgId        String
+  customerId   String
+  createdById  String
+  quoteId      String?        @unique
+
+  number       String
+  reference    String?
+
+  issueDate    DateTime       @default(now())
+  dueDate      DateTime?
+  paidAt       DateTime?
+
+  status       DocumentStatus @default(DRAFT)
+
+  title        String?
+  headerNote   String?
+  footerNote   String?
+
+  legalMentions     String?
+  penaltyClause     String?
+  discountTerms     String?
+  isMicroEnterprise Boolean   @default(false)
+
+  totalHT      Decimal        @db.Decimal(15, 2) @default(0)
+  totalTVA     Decimal        @db.Decimal(15, 2) @default(0)
+  totalTTC     Decimal        @db.Decimal(15, 2) @default(0)
+  totalPaid    Decimal        @db.Decimal(15, 2) @default(0)
+  totalDue     Decimal        @db.Decimal(15, 2) @default(0)
+  currency     String         @default("EUR")
+  discount     Decimal?       @db.Decimal(5, 2)
+
+  pdfUrl       String?
+  pdfHash      String?
+  designConfig  Json?
+  columnsConfig Json?
+
+  isEInvoice     Boolean        @default(false)
+  eInvoiceFormat EInvoiceFormat?
+  frozenAt       DateTime?
+
+  depositAmount  Decimal?     @db.Decimal(15, 2)
+  depositPercent Decimal?     @db.Decimal(5, 2)
+
+  deletedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  org          Org            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  customer     Customer       @relation(fields: [customerId], references: [id])
+  createdBy    User           @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  quote        Quote?         @relation("QuoteToInvoice", fields: [quoteId], references: [id])
+  lines        InvoiceLine[]
+  statusHistory InvoiceStatusHistory[]
+  payments     Payment[]
+  creditNotes  CreditNote[]
+  einvoiceDoc  EInvoiceDocument?
+  paymentSchedule PaymentSchedule[]
+  reminders    InvoiceReminder[]
+
+  @@index([orgId])
+  @@index([customerId])
+  @@index([status])
+  @@index([number])
+  @@index([dueDate])
+  @@index([deletedAt])
+}
+
+model InvoiceLine {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  position    Int
+  designation String
+  description String?
+  reference   String?
+  unit        String?
+  quantity    Decimal  @db.Decimal(10, 3)
+  unitPriceHT Decimal  @db.Decimal(15, 4)
+  vatRate     Decimal  @db.Decimal(5, 2) @default(20)
+  discount    Decimal? @db.Decimal(5, 2)
+  totalHT     Decimal  @db.Decimal(15, 2)
+  totalTTC    Decimal  @db.Decimal(15, 2)
+  customFields Json?
+
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model InvoiceStatusHistory {
+  id        String         @id @default(cuid())
+  invoiceId String
+  status    DocumentStatus
+  note      String?
+  createdAt DateTime       @default(now())
+  createdBy String?
+
+  invoice   Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model InvoiceReminder {
+  id        String   @id @default(cuid())
+  invoiceId String
+  sentAt    DateTime
+  type      String   // GENTLE | FORMAL | LEGAL
+  channel   String   // EMAIL | SMS
+  createdAt DateTime @default(now())
+
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model PaymentSchedule {
+  id        String   @id @default(cuid())
+  invoiceId String
+  dueDate   DateTime
+  amount    Decimal  @db.Decimal(15, 2)
+  label     String?
+  paidAt    DateTime?
+  createdAt DateTime @default(now())
+
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AVOIRS
+// ════════════════════════════════════════════════════════════════════════════
+
+model CreditNote {
+  id          String         @id @default(cuid())
+  orgId       String
+  customerId  String
+  invoiceId   String
+
+  number      String
+  issueDate   DateTime       @default(now())
+  reason      String?
+  status      DocumentStatus @default(DRAFT)
+
+  totalHT     Decimal        @db.Decimal(15, 2)
+  totalTVA    Decimal        @db.Decimal(15, 2)
+  totalTTC    Decimal        @db.Decimal(15, 2)
+  currency    String         @default("EUR")
+
+  pdfUrl      String?
+  pdfHash     String?
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  org         Org            @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  customer    Customer       @relation(fields: [customerId], references: [id])
+  invoice     Invoice        @relation(fields: [invoiceId], references: [id])
+  lines       CreditNoteLine[]
+
+  @@index([orgId])
+  @@index([customerId])
+  @@index([invoiceId])
+}
+
+model CreditNoteLine {
+  id           String     @id @default(cuid())
+  creditNoteId String
+  position     Int
+  designation  String
+  quantity     Decimal    @db.Decimal(10, 3)
+  unitPriceHT  Decimal    @db.Decimal(15, 4)
+  vatRate      Decimal    @db.Decimal(5, 2)
+  totalHT      Decimal    @db.Decimal(15, 2)
+  totalTTC     Decimal    @db.Decimal(15, 2)
+
+  creditNote   CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+
+  @@index([creditNoteId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PAIEMENTS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Payment {
+  id           String        @id @default(cuid())
+  orgId        String
+  customerId   String?
+  invoiceId    String?
+
+  amount       Decimal       @db.Decimal(15, 2)
+  currency     String        @default("EUR")
+  method       PaymentMethod @default(BANK_TRANSFER)
+  status       PaymentStatus @default(PENDING)
+
+  reference                 String?
+  stripePaymentIntentId     String?
+  stripeChargeId            String?
+
+  paidAt       DateTime?
+  note         String?
+
+  refundedAt   DateTime?
+  refundAmount Decimal?      @db.Decimal(15, 2)
+  refundReason String?
+
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  org          Org           @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  customer     Customer?     @relation(fields: [customerId], references: [id])
+  invoice      Invoice?      @relation(fields: [invoiceId], references: [id])
+  attempts     PaymentAttempt[]
+
+  @@index([orgId])
+  @@index([invoiceId])
+  @@index([stripePaymentIntentId])
+  @@index([status])
+}
+
+model PaymentAttempt {
+  id          String        @id @default(cuid())
+  paymentId   String
+  amount      Decimal       @db.Decimal(15, 2)
+  status      PaymentStatus
+  errorCode   String?
+  errorMsg    String?
+  gatewayRef  String?
+  attemptedAt DateTime      @default(now())
+
+  payment     Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FACTURE ÉLECTRONIQUE — Conforme réforme française 2026/2027
+// Transit obligatoire via PDP (Plateforme de Dématérialisation Partenaire)
+// M7:7 n'est PAS une PDP — il se connecte à une PDP partenaire
+// ════════════════════════════════════════════════════════════════════════════
+
+model EInvoiceDocument {
+  id             String          @id @default(cuid())
+  orgId          String
+  invoiceId      String          @unique
+
+  documentNumber String
+  format         EInvoiceFormat
+
+  // Identifiants légaux obligatoires
+  sellerSiren    String
+  sellerSiret    String?
+  sellerTva      String?
+  buyerSiren     String?
+  buyerSiret     String?
+  buyerTva       String?
+
+  totalHT        Decimal         @db.Decimal(15, 2)
+  totalTVA       Decimal         @db.Decimal(15, 2)
+  totalTTC       Decimal         @db.Decimal(15, 2)
+  currency       String          @default("EUR")
+  issueDate      DateTime
+
+  // PDP partenaire
+  pdpProvider    String
+  pdpMessageId   String?
+  pdpSubmittedAt DateTime?
+
+  status         EInvoiceStatus  @default(PENDING)
+
+  // Stockage légal — piste d'audit fiable (10 ans)
+  pdfStoragePath String?         // Chemin PDF/A-3
+  xmlStoragePath String?         // Chemin XML (CII ou UBL)
+  checksumSha256 String?         // Empreinte SHA-256 du document final
+
+  // Timeline
+  submittedAt    DateTime?
+  deliveredAt    DateTime?
+  acceptedAt     DateTime?
+  rejectedAt     DateTime?
+  paymentAt      DateTime?
+  archivedAt     DateTime?
+
+  rejectReason   String?
+  rejectCode     String?
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  org            Org             @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invoice        Invoice         @relation(fields: [invoiceId], references: [id])
+  statusEvents   EInvoiceStatusEvent[]
+  archive        EInvoiceArchive?
+
+  @@index([orgId])
+  @@index([status])
+  @@index([pdpMessageId])
+  @@index([sellerSiren])
+}
+
+// Timeline immuable des événements PDP
+model EInvoiceStatusEvent {
+  id            String           @id @default(cuid())
+  einvoiceDocId String
+
+  source        String           // internal | pdp | customer_platform | admin
+  eventCode     String
+  eventLabel    String?
+  occurredAt    DateTime         @default(now())
+  rawPayloadJson Json?
+  isTerminal    Boolean          @default(false)
+
+  einvoiceDoc   EInvoiceDocument @relation(fields: [einvoiceDocId], references: [id], onDelete: Cascade)
+
+  @@index([einvoiceDocId])
+  @@index([occurredAt])
+}
+
+// Archive légale probante — conservation 10 ans minimum
+model EInvoiceArchive {
+  id              String           @id @default(cuid())
+  einvoiceDocId   String           @unique
+
+  xmlContent      String?          // XML CII ou UBL
+  checksumSha256  String           // Empreinte numérique
+  archivedAt      DateTime         @default(now())
+  retainUntil     DateTime         // Date limite légale (now + 10 ans)
+
+  einvoiceDoc     EInvoiceDocument @relation(fields: [einvoiceDocId], references: [id])
+  accessLogs      EInvoiceArchiveAccess[]
+
+  @@index([einvoiceDocId])
+}
+
+model EInvoiceArchiveAccess {
+  id         String          @id @default(cuid())
+  archiveId  String
+  userId     String?
+  ipAddress  String?
+  reason     String?
+  accessedAt DateTime        @default(now())
+
+  archive    EInvoiceArchive @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@index([archiveId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENTS (fichiers uploadés)
+// ════════════════════════════════════════════════════════════════════════════
+
+model Document {
+  id           String   @id @default(cuid())
+  orgId        String
+  name         String
+  originalName String
+  mimeType     String
+  size         Int
+  storagePath  String
+  url          String?
+  checksum     String?
+
+  invoiceId    String?
+  quoteId      String?
+  customerId   String?
+
+  category     String?
+  tags         String[]
+  uploadedById String?
+
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  org          Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([invoiceId])
+  @@index([deletedAt])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// URSSAF
+// ════════════════════════════════════════════════════════════════════════════
+
+model UrssafConnection {
+  id               String   @id @default(cuid())
+  orgId            String   @unique
+
+  siret            String
+  urssafLogin      String?
+  tokenEncrypted   String?  // Token API chiffré AES-256
+  isActive         Boolean  @default(false)
+  authorizedAt     DateTime?
+  expiresAt        DateTime?
+  connectionType   String   // tierce_declaration_ae | simulation | attestation
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  org              Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  declarations     UrssafDeclaration[]
+  simulations      UrssafSimulation[]
+
+  @@index([orgId])
+}
+
+model UrssafDeclaration {
+  id           String                  @id @default(cuid())
+  connectionId String
+  orgId        String
+
+  period       String                  // "2025-T1" | "2025-01"
+  periodType   String                  // quarterly | monthly
+  revenue      Decimal                 @db.Decimal(15, 2)
+  cotisations  Decimal?                @db.Decimal(15, 2)
+
+  status       UrssafDeclarationStatus @default(DRAFT)
+  submittedAt  DateTime?
+  acceptedAt   DateTime?
+  urssafRef    String?
+
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  connection   UrssafConnection        @relation(fields: [connectionId], references: [id])
+
+  @@index([connectionId])
+  @@index([orgId])
+}
+
+model UrssafSimulation {
+  id           String            @id @default(cuid())
+  connectionId String?
+  orgId        String
+  inputParams  Json
+  result       Json
+  simulatedAt  DateTime          @default(now())
+
+  connection   UrssafConnection? @relation(fields: [connectionId], references: [id])
+
+  @@index([orgId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// INTÉGRATIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Integration {
+  id                  String          @id @default(cuid())
+  orgId               String
+  type                IntegrationType
+  name                String
+  isActive            Boolean         @default(false)
+  configJson          Json?
+  credentialEncrypted String?         // Credentials chiffrés AES-256
+
+  lastSyncAt          DateTime?
+  lastSyncStatus      String?
+  lastSyncError       String?
+
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  org                 Org             @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, type])
+  @@index([orgId])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WEBHOOKS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Webhook {
+  id        String   @id @default(cuid())
+  orgId     String
+  url       String
+  secret    String   // HMAC secret — vérification signature
+  events    String[]
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  org       Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([orgId])
+}
+
+model WebhookDelivery {
+  id            String   @id @default(cuid())
+  webhookId     String
+  event         String
+  payload       Json
+  statusCode    Int?
+  response      String?
+  success       Boolean  @default(false)
+  attempts      Int      @default(0)
+  lastAttemptAt DateTime?
+  createdAt     DateTime @default(now())
+
+  webhook       Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([event])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AUDIT LOGS — immuables, signés HMAC-SHA256
+// ════════════════════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  orgId      String?
+  action     String
+  resource   String?
+  resourceId String?
+  ipAddress  String?
+  userAgent  String?
+  detail     String?
+  hmac       String?  // HMAC-SHA256 — détection de falsification
+
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  org        Org?     @relation(fields: [orgId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([orgId])
+  @@index([action])
+  @@index([resourceId])
+  @@index([createdAt])
+}
