@@ -192,8 +192,8 @@ router.post("/", authorize("invoices", "create"), async (req: Request, res: Resp
         depositPercent:   body.depositPercent,
         isEInvoice:       body.isEInvoice,
         eInvoiceFormat:   body.eInvoiceFormat,
-        designConfig:     body.designConfig,
-        columnsConfig:    body.columnsConfig,
+        designConfig:     body.designConfig as any,
+        columnsConfig:    body.columnsConfig as any,
         totalHT, totalTVA, totalTTC,
         totalDue: totalTTC,
         lines: {
