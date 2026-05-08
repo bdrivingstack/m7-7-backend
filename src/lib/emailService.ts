@@ -1,14 +1,20 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const FROM_DEFAULT  = process.env.EMAIL_FROM         || "M7Sept <noreply@gmail.com>";
+const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || process.env.EMAIL_FROM || "M7Sept <noreply@gmail.com>";
+const APP_URL       = process.env.FRONTEND_URL        || "http://localhost:8080";
 
-const resend = new Resend(RESEND_API_KEY || "placeholder");
-
-const FROM_DEFAULT  = process.env.EMAIL_FROM        || "M7Sept <onboarding@resend.dev>";
-const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || "M7Sept <onboarding@resend.dev>";
-const APP_URL       = process.env.FRONTEND_URL       || "http://localhost:8080";
+const transporter = nodemailer.createTransport({
+  host:   process.env.SMTP_HOST || "smtp.gmail.com",
+  port:   Number(process.env.SMTP_PORT) || 587,
+  secure: false, // TLS via STARTTLS sur port 587
+  auth: {
+    user: process.env.SMTP_USER || "",
+    pass: process.env.SMTP_PASS || "",
+  },
+});
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -19,28 +25,26 @@ interface SendResult {
 }
 
 // ─── HELPER : Wrapper sécurisé ────────────────────────────────────────────────
-// Ne fait jamais planter l'opération métier si l'email échoue
 
 async function send(params: {
-  from?:       string;
-  to:          string | string[];
-  subject:     string;
-  html:        string;
+  from?:        string;
+  to:           string | string[];
+  subject:      string;
+  html:         string;
   attachments?: { filename: string; content: Buffer }[];
 }): Promise<SendResult> {
   try {
-    const { data, error } = await resend.emails.send({
+    const info = await transporter.sendMail({
       from:        params.from || FROM_DEFAULT,
-      to:          Array.isArray(params.to) ? params.to : [params.to],
+      to:          Array.isArray(params.to) ? params.to.join(", ") : params.to,
       subject:     params.subject,
       html:        params.html,
       attachments: params.attachments?.map(a => ({
         filename: a.filename,
-        content:  a.content.toString("base64"),
+        content:  a.content,
       })),
     });
-    if (error) return { success: false, error: error.message };
-    return { success: true, id: data?.id };
+    return { success: true, id: info.messageId };
   } catch (err: any) {
     console.error("[emailService] Erreur envoi email :", err?.message);
     return { success: false, error: err?.message };
