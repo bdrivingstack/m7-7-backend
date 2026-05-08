@@ -48,15 +48,14 @@ app.use(helmet({
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
-  process.env.FRONTEND_URL,          // URL configurée dans .env
+  process.env.FRONTEND_URL,
   "http://localhost:8080",
   "http://127.0.0.1:8080",
-  "https://m7sept-front.vercel.app", // Production Vercel
+  "https://m7sept-front.vercel.app",
 ].filter(Boolean) as string[];
 
-app.use(cors({
+const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    // Autorise les requêtes sans origin (curl, Postman, server-to-server)
     if (!origin || ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
@@ -64,9 +63,13 @@ app.use(cors({
     }
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-}));
+};
+
+// Répondre aux requêtes preflight OPTIONS sur toutes les routes
+app.options("*", cors(corsOptions));
+app.use(cors(corsOptions));
 
 // ─── STRIPE WEBHOOK — doit être AVANT express.json() (body brut requis) ─────────
 app.use("/api/stripe", express.raw({ type: "application/json" }), stripeRouter);
