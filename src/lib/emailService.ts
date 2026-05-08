@@ -3,11 +3,8 @@ import { Resend } from "resend";
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-if (!RESEND_API_KEY) {
-  throw new Error("❌ RESEND_API_KEY manquante dans .env");
-}
 
-const resend = new Resend(RESEND_API_KEY);
+const resend = new Resend(RESEND_API_KEY || "placeholder");
 
 const FROM_DEFAULT  = process.env.EMAIL_FROM        || "M7Sept <noreply@m7sept.fr>";
 const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || "M7Sept Facturation <facturation@m7sept.fr>";

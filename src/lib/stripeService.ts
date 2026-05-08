@@ -6,11 +6,8 @@ import { auditLog } from "./audit.js";
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-if (!STRIPE_SECRET_KEY) {
-  throw new Error("❌ STRIPE_SECRET_KEY manquante dans .env");
-}
 
-export const stripe = new Stripe(STRIPE_SECRET_KEY, {
+export const stripe = new Stripe(STRIPE_SECRET_KEY || "placeholder", {
   apiVersion: "2026-02-25.clover",
   typescript:  true,
 });
