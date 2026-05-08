@@ -101,8 +101,8 @@ app.use((_req, res) => {
   res.status(404).json({ code: "NOT_FOUND", message: "Route introuvable." });
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ M7Sept Backend démarré sur http://localhost:${PORT}`);
+app.listen(Number(PORT), "0.0.0.0", () => {
+  console.log(`✅ M7Sept Backend démarré sur http://0.0.0.0:${PORT}`);
 });
 
 export default app;

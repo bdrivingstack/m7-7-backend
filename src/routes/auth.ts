@@ -21,11 +21,12 @@ const JWT_EXPIRES_IN      = "15m";    // Access token courte durée
 const REFRESH_EXPIRES_IN  = "7d";     // Refresh token longue durée
 const MAX_LOGIN_ATTEMPTS  = 5;        // Avant verrouillage
 const LOCK_DURATION_MIN   = 15;       // Minutes de verrouillage
+const isProd = process.env.NODE_ENV === "production";
 const COOKIE_OPTS = {
-  httpOnly:  true,         // Inaccessible depuis JavaScript (anti-XSS)
-  secure:    process.env.NODE_ENV === "production", // HTTPS seulement en prod
-  sameSite:  "strict" as const,  // Anti-CSRF
-  path:      "/",
+  httpOnly: true,
+  secure:   isProd,
+  sameSite: (isProd ? "none" : "lax") as "none" | "lax",
+  path:     "/",
 };
 
 // ─── HELPER : Réponse erreur identifiants (toujours le même message) ─────────
