@@ -45,7 +45,7 @@ router.post("/:invoiceId/submit", authorize("invoices","send"), async (req, res,
   try {
     const invoice = await prisma.invoice.findUnique({
       where:   { id:req.params.invoiceId },
-      include: { customer:true, lines:true, org:true },
+      include: { customer:true, lines:true, org:true, einvoiceDoc:true },
     });
     requireSameOrg(req, invoice);
 
@@ -164,7 +164,10 @@ router.post("/pdp-webhook", async (req, res, next) => {
 // Archivage légal probant (après acceptation)
 router.post("/:id/archive", authorize("invoices","update"), async (req, res, next) => {
   try {
-    const doc = await prisma.eInvoiceDocument.findUnique({ where:{ id:req.params.id } });
+    const doc = await prisma.eInvoiceDocument.findUnique({
+      where:   { id:req.params.id },
+      include: { archive:true },
+    });
     requireSameOrg(req, doc);
     if (doc!.status !== "ACCEPTED") throw new Error("Seul un document accepté peut être archivé.");
     if (doc!.archive) throw new Error("Ce document est déjà archivé.");

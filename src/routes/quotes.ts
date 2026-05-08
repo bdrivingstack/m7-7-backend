@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { authorize, requireSameOrg } from "../middleware/authorize.js";
@@ -124,10 +125,12 @@ router.post("/", authorize("quotes","create"), async (req, res, next) => {
         validUntil: body.validUntil ? new Date(body.validUntil) : undefined,
         title: body.title, headerNote: body.headerNote, footerNote: body.footerNote,
         currency: body.currency, discount: body.discount,
-        designConfig: body.designConfig, columnsConfig: body.columnsConfig,
+        designConfig: body.designConfig as Prisma.InputJsonValue | undefined,
+        columnsConfig: body.columnsConfig as Prisma.InputJsonValue | undefined,
         totalHT, totalTVA, totalTTC,
         lines: { create: body.lines.map(l => ({
           ...l,
+          customFields: l.customFields as Prisma.InputJsonValue | undefined,
           totalHT:  Math.round(l.unitPriceHT * l.quantity * (1-(l.discount||0)/100) * 100) / 100,
           totalTTC: Math.round(l.unitPriceHT * l.quantity * (1-(l.discount||0)/100) * (1+l.vatRate/100) * 100) / 100,
         }))},
@@ -156,6 +159,7 @@ router.patch("/:id", authorize("quotes","update"), async (req, res, next) => {
       await prisma.quoteLine.deleteMany({ where: { quoteId: req.params.id } });
       await prisma.quoteLine.createMany({ data: body.lines.map(l => ({
         quoteId: req.params.id, ...l,
+        customFields: l.customFields as Prisma.InputJsonValue | undefined,
         totalHT:  Math.round(l.unitPriceHT * l.quantity * (1-(l.discount||0)/100) * 100) / 100,
         totalTTC: Math.round(l.unitPriceHT * l.quantity * (1-(l.discount||0)/100) * (1+l.vatRate/100) * 100) / 100,
       }))});
@@ -227,8 +231,8 @@ router.post("/:id/convert", authorize("invoices","create"), async (req, res, nex
         currency: quote!.currency,
         totalHT: quote!.totalHT, totalTVA: quote!.totalTVA, totalTTC: quote!.totalTTC,
         totalDue: quote!.totalTTC,
-        designConfig: quote!.designConfig ?? undefined,
-        columnsConfig: quote!.columnsConfig ?? undefined,
+        designConfig: (quote!.designConfig ?? undefined) as Prisma.InputJsonValue | undefined,
+        columnsConfig: (quote!.columnsConfig ?? undefined) as Prisma.InputJsonValue | undefined,
         lines: { create: quote!.lines.map(l => ({
           position:l.position, designation:l.designation, description:l.description ?? undefined,
           reference:l.reference ?? undefined, unit:l.unit ?? undefined,

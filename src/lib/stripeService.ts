@@ -11,7 +11,7 @@ if (!STRIPE_SECRET_KEY) {
 }
 
 export const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: "2024-04-10",
+  apiVersion: "2026-02-25.clover",
   typescript:  true,
 });
 
@@ -425,7 +425,7 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<void> {
 
     // ── Abonnement SaaS créé / activé ─────────────────────────────────
     case "checkout.session.completed": {
-      const session = event.data.object as Stripe.CheckoutSession;
+      const session = event.data.object as Stripe.Checkout.Session;
       if (session.mode !== "subscription") break;
 
       const { orgId, plan } = session.metadata || {};
@@ -455,7 +455,7 @@ export async function handleWebhookEvent(event: Stripe.Event): Promise<void> {
     // ── Paiement abonnement réussi ─────────────────────────────────────
     case "invoice.payment_succeeded": {
       const stripeInvoice = event.data.object as Stripe.Invoice;
-      const orgId = (stripeInvoice.subscription_details?.metadata?.orgId ||
+      const orgId = ((stripeInvoice as any).subscription_details?.metadata?.orgId ||
                      stripeInvoice.metadata?.orgId) as string;
       if (!orgId) break;
 
@@ -541,7 +541,7 @@ export async function getActiveSubscription(orgId: string): Promise<{
     return {
       plan:             config.plan,
       status:           sub.status,
-      currentPeriodEnd: new Date(sub.current_period_end * 1000),
+      currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
       cancelAtPeriodEnd:sub.cancel_at_period_end,
     };
   } catch {

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { authorize, requireSameOrg } from "../middleware/authorize.js";
@@ -192,13 +193,14 @@ router.post("/", authorize("invoices", "create"), async (req: Request, res: Resp
         depositPercent:   body.depositPercent,
         isEInvoice:       body.isEInvoice,
         eInvoiceFormat:   body.eInvoiceFormat,
-        designConfig:     body.designConfig,
-        columnsConfig:    body.columnsConfig,
+        designConfig:     body.designConfig as Prisma.InputJsonValue | undefined,
+        columnsConfig:    body.columnsConfig as Prisma.InputJsonValue | undefined,
         totalHT, totalTVA, totalTTC,
         totalDue: totalTTC,
         lines: {
           create: body.lines.map(line => ({
             ...line,
+            customFields: line.customFields as Prisma.InputJsonValue | undefined,
             totalHT:  Math.round(line.unitPriceHT * line.quantity * (1 - (line.discount || 0) / 100) * 100) / 100,
             totalTTC: Math.round(line.unitPriceHT * line.quantity * (1 - (line.discount || 0) / 100) * (1 + line.vatRate / 100) * 100) / 100,
           })),
@@ -243,6 +245,7 @@ router.patch("/:id", authorize("invoices", "update"), async (req: Request, res: 
         data: body.lines.map(line => ({
           invoiceId: req.params.id,
           ...line,
+          customFields: line.customFields as Prisma.InputJsonValue | undefined,
           totalHT:  Math.round(line.unitPriceHT * line.quantity * (1 - (line.discount || 0) / 100) * 100) / 100,
           totalTTC: Math.round(line.unitPriceHT * line.quantity * (1 - (line.discount || 0) / 100) * (1 + line.vatRate / 100) * 100) / 100,
         })),

@@ -62,6 +62,7 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
     const passwordHash = await bcrypt.hash(body.password, BCRYPT_ROUNDS);
 
     // 4. Créer l'organisation et l'utilisateur (owner)
+    const isDev = process.env.NODE_ENV !== "production";
     const org = await prisma.org.create({
       data: {
         name:      body.company,
@@ -74,7 +75,7 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
             email:        body.email,
             passwordHash,
             role:         "OWNER",
-            isVerified:   false,
+            isVerified:   isDev, // Auto-vérifié en dev, sinon via lien email
           },
         },
       },
