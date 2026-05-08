@@ -23,30 +23,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// ─── SÉCURITÉ — Headers HTTP ──────────────────────────────────────────────────
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc:  ["'self'"],
-      scriptSrc:   ["'self'"],
-      styleSrc:    ["'self'", "'unsafe-inline'"],
-      imgSrc:      ["'self'", "data:", "https:"],
-      connectSrc:  ["'self'"],
-      fontSrc:     ["'self'"],
-      objectSrc:   ["'none'"],
-      frameAncestors: ["'none'"],
-    },
-  },
-  hsts: {
-    maxAge: 31536000,
-    includeSubDomains: true,
-    preload: true,
-  },
-  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  xFrameOptions: { action: "deny" },
-}));
-
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+// ─── CORS — doit être EN PREMIER avant Helmet ─────────────────────────────────
 const ALLOWED_ORIGINS = [
   process.env.FRONTEND_URL,
   "http://localhost:8080",
@@ -67,9 +44,21 @@ const corsOptions: cors.CorsOptions = {
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 
-// Répondre aux requêtes preflight OPTIONS sur toutes les routes
 app.options("*", cors(corsOptions));
 app.use(cors(corsOptions));
+
+// ─── SÉCURITÉ — Headers HTTP ──────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: false,        // désactivé — géré côté frontend
+  crossOriginResourcePolicy: false,    // permet les requêtes cross-origin
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  xFrameOptions: { action: "deny" },
+}));
 
 // ─── STRIPE WEBHOOK — doit être AVANT express.json() (body brut requis) ─────────
 app.use("/api/stripe", express.raw({ type: "application/json" }), stripeRouter);
