@@ -124,7 +124,7 @@ router.post("/", authorize("quotes","create"), async (req, res, next) => {
         validUntil: body.validUntil ? new Date(body.validUntil) : undefined,
         title: body.title, headerNote: body.headerNote, footerNote: body.footerNote,
         currency: body.currency, discount: body.discount,
-        designConfig: body.designConfig, columnsConfig: body.columnsConfig,
+        designConfig: body.designConfig as any, columnsConfig: body.columnsConfig as any,
         totalHT, totalTVA, totalTTC,
         lines: { create: body.lines.map(l => ({
           ...l,
