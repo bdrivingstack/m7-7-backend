@@ -106,6 +106,8 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
     });
 
     // 7. Envoyer l'email de vérification
+    // Toujours logguer le lien pour pouvoir vérifier manuellement via les logs Railway
+    console.log(`[VERIFY] ${user.email} → ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
     try {
       await sendVerificationEmail({
         to:        user.email,
@@ -113,9 +115,7 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
         token:     verifyToken,
       });
     } catch (emailErr) {
-      // Email non bloquant — le compte est créé, on log l'erreur
       console.error("[EMAIL] Erreur envoi vérification :", emailErr);
-      console.log(`[DEV] Lien de vérification : ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
     }
 
     return res.status(201).json({

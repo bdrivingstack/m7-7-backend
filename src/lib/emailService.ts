@@ -6,8 +6,8 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
 const resend = new Resend(RESEND_API_KEY || "placeholder");
 
-const FROM_DEFAULT  = process.env.EMAIL_FROM        || "M7Sept <noreply@m7sept.fr>";
-const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || "M7Sept Facturation <facturation@m7sept.fr>";
+const FROM_DEFAULT  = process.env.EMAIL_FROM        || "M7Sept <onboarding@resend.dev>";
+const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || "M7Sept <onboarding@resend.dev>";
 const APP_URL       = process.env.FRONTEND_URL       || "http://localhost:8080";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
