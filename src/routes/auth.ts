@@ -114,11 +114,16 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
     // Toujours logguer le lien pour pouvoir vérifier manuellement via les logs Railway
     console.log(`[VERIFY] ${user.email} → ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
     try {
-      await sendVerificationEmail({
+      const emailResult = await sendVerificationEmail({
         to:        user.email,
         firstName: user.firstName,
         token:     verifyToken,
       });
+      if (emailResult.success) {
+        console.log(`[EMAIL] ✅ Email vérification envoyé à ${user.email} (id: ${emailResult.id})`);
+      } else {
+        console.error(`[EMAIL] ❌ Échec envoi à ${user.email} :`, emailResult.error);
+      }
     } catch (emailErr) {
       console.error("[EMAIL] Erreur envoi vérification :", emailErr);
     }

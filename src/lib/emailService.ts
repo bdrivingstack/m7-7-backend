@@ -6,13 +6,18 @@ const FROM_DEFAULT  = process.env.EMAIL_FROM         || "M7Sept <noreply@gmail.c
 const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || process.env.EMAIL_FROM || "M7Sept <noreply@gmail.com>";
 const APP_URL       = process.env.FRONTEND_URL        || "http://localhost:8080";
 
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+
+console.log(`[emailService] SMTP_USER=${SMTP_USER || "MANQUANT"} SMTP_PASS=${SMTP_PASS ? "***défini***" : "MANQUANT"}`);
+
 const transporter = nodemailer.createTransport({
   host:   process.env.SMTP_HOST || "smtp.gmail.com",
   port:   Number(process.env.SMTP_PORT) || 587,
   secure: false, // TLS via STARTTLS sur port 587
   auth: {
-    user: process.env.SMTP_USER || "",
-    pass: process.env.SMTP_PASS || "",
+    user: SMTP_USER,
+    pass: SMTP_PASS,
   },
 });
 
