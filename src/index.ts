@@ -99,7 +99,7 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/test-email", async (_req, res) => {
   const { sendVerificationEmail } = await import("./lib/emailService.js");
   const result = await sendVerificationEmail({
-    to:        process.env.SMTP_USER || "",
+    to:        process.env.TEST_EMAIL || "belvederedriving@gmail.com",
     firstName: "Test",
     token:     "test-token-123",
   });

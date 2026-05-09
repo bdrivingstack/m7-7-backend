@@ -1,47 +1,16 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
-const SMTP_HOST        = process.env.SMTP_HOST        || "";
-const SMTP_PORT        = Number(process.env.SMTP_PORT) || 465;
-const SMTP_SECURE      = process.env.SMTP_SECURE      === "true";
-const SMTP_REQUIRE_TLS = process.env.SMTP_REQUIRE_TLS === "true" || SMTP_PORT === 587;
-const SMTP_USER        = process.env.SMTP_USER        || "";
-const SMTP_PASS        = process.env.SMTP_PASS        || "";
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const FROM_DEFAULT   = process.env.EMAIL_FROM          || "M7Sept <onboarding@resend.dev>";
+const FROM_INVOICES  = process.env.EMAIL_FROM_INVOICES || FROM_DEFAULT;
+const APP_URL        = process.env.FRONTEND_URL        || "http://localhost:8080";
 
-const FROM_DEFAULT  = process.env.EMAIL_FROM          || `M7Sept <${SMTP_USER}>`;
-const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES  || FROM_DEFAULT;
-const APP_URL       = process.env.FRONTEND_URL         || "http://localhost:8080";
+console.log("[emailService] RESEND_API_KEY=", RESEND_API_KEY ? "***défini***" : "MANQUANT");
+console.log("[emailService] FROM_DEFAULT=",   FROM_DEFAULT);
 
-// Logs démarrage — jamais le mot de passe
-console.log("[emailService] SMTP_HOST=",        SMTP_HOST        || "MANQUANT");
-console.log("[emailService] SMTP_PORT=",        SMTP_PORT);
-console.log("[emailService] SMTP_SECURE=",      SMTP_SECURE);
-console.log("[emailService] SMTP_REQUIRE_TLS=", SMTP_REQUIRE_TLS);
-console.log("[emailService] SMTP_USER=",        SMTP_USER        || "MANQUANT");
-
-const transporter = nodemailer.createTransport({
-  host:        SMTP_HOST,
-  port:        SMTP_PORT,
-  secure:      SMTP_SECURE,
-  requireTLS:  SMTP_REQUIRE_TLS,
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PASS,
-  },
-  connectionTimeout: 10000,
-  greetingTimeout:   10000,
-  socketTimeout:     10000,
-});
-
-// Vérification connexion SMTP au démarrage
-transporter.verify((error) => {
-  if (error) {
-    console.error("[emailService] SMTP verify FAILED:", error.message);
-  } else {
-    console.log("[emailService] SMTP ready ✅");
-  }
-});
+const resend = new Resend(RESEND_API_KEY);
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -61,9 +30,9 @@ async function send(params: {
   attachments?: { filename: string; content: Buffer }[];
 }): Promise<SendResult> {
   try {
-    const info = await transporter.sendMail({
+    const { data, error } = await resend.emails.send({
       from:        params.from || FROM_DEFAULT,
-      to:          Array.isArray(params.to) ? params.to.join(", ") : params.to,
+      to:          Array.isArray(params.to) ? params.to : [params.to],
       subject:     params.subject,
       html:        params.html,
       attachments: params.attachments?.map(a => ({
@@ -71,9 +40,13 @@ async function send(params: {
         content:  a.content,
       })),
     });
-    return { success: true, id: info.messageId };
+    if (error) {
+      console.error("[emailService] Erreur Resend :", error.message);
+      return { success: false, error: error.message };
+    }
+    return { success: true, id: data?.id };
   } catch (err: any) {
-    console.error("[emailService] Erreur envoi email :", err?.message);
+    console.error("[emailService] Exception :", err?.message);
     return { success: false, error: err?.message };
   }
 }
