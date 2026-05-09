@@ -427,8 +427,7 @@ router.get("/verify-email", async (req: Request, res: Response, next: NextFuncti
       prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
     ]);
 
-    // Redirect frontend
-    return res.redirect(`${process.env.FRONTEND_URL}/login?verified=true`);
+    return res.json({ success: true });
 
   } catch (err) {
     next(err);
