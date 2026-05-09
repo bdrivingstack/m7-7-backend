@@ -71,6 +71,7 @@ router.patch("/me", async (req, res, next) => {
     const body = UpdateUserSchema.omit({ role:true }).parse(req.body); // Ne peut pas changer son propre rôle
     const user = await prisma.user.update({ where:{ id:req.user.id }, data: body,
       select:{ id:true, firstName:true, lastName:true, email:true, role:true, phone:true, timezone:true } });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"PROFILE_UPDATED", ipAddress:req.ip, userAgent:req.get("User-Agent"), detail: Object.keys(body).join(", ") });
     res.json({ data: user });
   } catch(err){ next(err); }
 });
@@ -91,7 +92,7 @@ router.post("/me/change-password", async (req, res, next) => {
       prisma.session.deleteMany({ where:{ userId:req.user.id } }),
     ]);
 
-    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"PASSWORD_CHANGED", ipAddress:req.ip });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"PASSWORD_CHANGED", ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success:true, message:"Mot de passe modifié. Reconnectez-vous." });
   } catch(err){ next(err); }
 });
@@ -125,7 +126,7 @@ router.post("/invite", authorize("users","create"), async (req, res, next) => {
     // TODO: Envoyer email d'invitation avec lien de définition de mot de passe
 
     await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"USER_INVITED",
-      resource:"user", resourceId:user.id, detail:body.email, ipAddress:req.ip });
+      resource:"user", resourceId:user.id, detail:body.email, ipAddress:req.ip, userAgent:req.get("User-Agent") });
 
     res.status(201).json({ data:{ id:user.id, email:user.email, role:user.role } });
   } catch(err){ next(err); }
@@ -144,7 +145,7 @@ router.patch("/:id", authorize("users","update"), async (req, res, next) => {
       select:{ id:true, firstName:true, lastName:true, email:true, role:true } });
 
     await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"USER_UPDATED",
-      resource:"user", resourceId:user.id, ipAddress:req.ip });
+      resource:"user", resourceId:user.id, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ data: user });
   } catch(err){ next(err); }
 });
@@ -165,7 +166,7 @@ router.delete("/:id", authorize("users","delete"), async (req, res, next) => {
     ]);
 
     await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"USER_DELETED",
-      resource:"user", resourceId:req.params.id, ipAddress:req.ip });
+      resource:"user", resourceId:req.params.id, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success: true });
   } catch(err){ next(err); }
 });

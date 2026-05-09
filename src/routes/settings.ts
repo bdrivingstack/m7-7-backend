@@ -90,7 +90,7 @@ router.patch("/org", authorize("settings","update"), async (req, res, next) => {
     const body = OrgSchema.partial().parse(req.body);
     const org  = await prisma.org.update({ where:{ id:req.user.orgId }, data:body,
       select:{ id:true, name:true, updatedAt:true } });
-    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"ORG_SETTINGS_UPDATED", ipAddress:req.ip });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"ORG_SETTINGS_UPDATED", ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ data: org });
   } catch(err){ next(err); }
 });
@@ -100,7 +100,7 @@ router.patch("/numbering", authorize("settings","update"), async (req, res, next
   try {
     const body = NumberingSchema.parse(req.body);
     const org  = await prisma.org.update({ where:{ id:req.user.orgId }, data:body });
-    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"NUMBERING_UPDATED", ipAddress:req.ip });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"NUMBERING_UPDATED", ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ data: { invoicePrefix:org.invoicePrefix, quotePrefix:org.quotePrefix,
       creditNotePrefix:org.creditNotePrefix, invoiceCounter:org.invoiceCounter } });
   } catch(err){ next(err); }
@@ -111,6 +111,7 @@ router.patch("/branding", authorize("settings","update"), async (req, res, next)
   try {
     const body = BrandingSchema.parse(req.body);
     await prisma.org.update({ where:{ id:req.user.orgId }, data:body });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"BRANDING_UPDATED", ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success: true });
   } catch(err){ next(err); }
 });
@@ -131,7 +132,7 @@ router.patch("/einvoicing", authorize("settings","update"), async (req, res, nex
     }
 
     await prisma.org.update({ where:{ id:req.user.orgId }, data:updateData });
-    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"EINVOICING_SETTINGS_UPDATED", ipAddress:req.ip });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"EINVOICING_SETTINGS_UPDATED", ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success: true });
   } catch(err){ next(err); }
 });
@@ -169,7 +170,7 @@ router.post("/integrations", authorize("settings","update"), async (req, res, ne
       update: updateData,
     });
     await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"INTEGRATION_UPDATED",
-      resource:"integration", resourceId:integration.id, detail:body.type, ipAddress:req.ip });
+      resource:"integration", resourceId:integration.id, detail:body.type, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ data:{ id:integration.id, type:integration.type, isActive:integration.isActive } });
   } catch(err){ next(err); }
 });
@@ -180,6 +181,8 @@ router.delete("/integrations/:id", authorize("settings","update"), async (req, r
     const integration = await prisma.integration.findUnique({ where:{ id:req.params.id } });
     if (!integration || integration.orgId !== req.user.orgId) throw new Error("Introuvable.");
     await prisma.integration.delete({ where:{ id:req.params.id } });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"INTEGRATION_DELETED",
+      resource:"integration", resourceId:req.params.id, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success: true });
   } catch(err){ next(err); }
 });
@@ -204,6 +207,8 @@ router.post("/webhooks", authorize("settings","update"), async (req, res, next) 
       events: body.events,
       secret,
     }});
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"WEBHOOK_CREATED",
+      resource:"webhook", resourceId:webhook.id, detail:body.url, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     // Renvoyer le secret UNE SEULE FOIS — ne sera plus accessible ensuite
     res.status(201).json({ data:{ id:webhook.id, url:webhook.url, events:webhook.events, secret } });
   } catch(err){ next(err); }
@@ -215,6 +220,8 @@ router.delete("/webhooks/:id", authorize("settings","update"), async (req, res, 
     const webhook = await prisma.webhook.findUnique({ where:{ id:req.params.id } });
     if (!webhook || webhook.orgId !== req.user.orgId) throw new Error("Introuvable.");
     await prisma.webhook.delete({ where:{ id:req.params.id } });
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"WEBHOOK_DELETED",
+      resource:"webhook", resourceId:req.params.id, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success: true });
   } catch(err){ next(err); }
 });

@@ -6,6 +6,7 @@ import { prisma } from "../lib/prisma.js";
 import { encrypt, decrypt, generateSecureToken } from "../lib/security.js";
 import { Errors, AppError } from "../middleware/errorHandler.js";
 import { loginLimiter, registerLimiter, forgotPasswordLimiter, resendVerificationLimiter } from "../middleware/rateLimiter.js";
+import { auditLog } from "../lib/audit.js";
 import {
   RegisterSchema, LoginSchema, MfaVerifySchema,
   ForgotPasswordSchema, ResetPasswordSchema,
@@ -33,15 +34,6 @@ const COOKIE_OPTS = {
 // Ne jamais dire "email inconnu" ou "mauvais mot de passe" → évite l'énumération
 function invalidCredentials() { throw Errors.INVALID_CREDENTIALS(); }
 
-// ─── HELPER : Log d'audit ────────────────────────────────────────────────────
-async function auditLog(params: {
-  userId?: string; orgId?: string; action: string;
-  resource?: string; ipAddress?: string; userAgent?: string; detail?: string;
-}) {
-  try {
-    await prisma.auditLog.create({ data: params });
-  } catch { /* Log non bloquant */ }
-}
 
 // ─── INSCRIPTION ─────────────────────────────────────────────────────────────
 router.post("/register", registerLimiter, async (req: Request, res: Response, next: NextFunction) => {
@@ -152,7 +144,7 @@ router.post("/login", loginLimiter, async (req: Request, res: Response, next: Ne
 
     // 3. Compte verrouillé ?
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      await auditLog({ userId: user.id, orgId: user.orgId, action: "LOGIN_BLOCKED_LOCKED", ipAddress: req.ip });
+      await auditLog({ userId: user.id, orgId: user.orgId, action: "LOGIN_BLOCKED_LOCKED", ipAddress: req.ip, userAgent: req.get("User-Agent") });
       throw Errors.ACCOUNT_LOCKED();
     }
 
@@ -250,7 +242,7 @@ router.post("/2fa/verify", async (req: Request, res: Response, next: NextFunctio
     const isValid = authenticator.verify({ token: code, secret });
 
     if (!isValid) {
-      await auditLog({ userId: user.id, orgId: user.orgId, action: "MFA_FAILED", ipAddress: req.ip });
+      await auditLog({ userId: user.id, orgId: user.orgId, action: "MFA_FAILED", ipAddress: req.ip, userAgent: req.get("User-Agent") });
       throw Errors.INVALID_2FA();
     }
 
@@ -262,7 +254,7 @@ router.post("/2fa/verify", async (req: Request, res: Response, next: NextFunctio
 
     await auditLog({
       userId: user.id, orgId: user.orgId,
-      action: "MFA_SUCCESS", ipAddress: req.ip,
+      action: "MFA_SUCCESS", ipAddress: req.ip, userAgent: req.get("User-Agent"),
     });
 
     return res.json({ success: true });
@@ -280,8 +272,12 @@ router.post("/logout", async (req: Request, res: Response, next: NextFunction) =
       // Invalider la session en base
       await prisma.session.deleteMany({ where: { token } }).catch(() => {});
     }
+    const session = await prisma.session.findUnique({ where: { token: token || "" } }).catch(() => null);
     res.clearCookie("session_token");
     res.clearCookie("refresh_token");
+    if (session) {
+      await auditLog({ userId: session.userId, orgId: session.orgId, action: "LOGOUT", ipAddress: req.ip, userAgent: req.get("User-Agent") });
+    }
     return res.json({ success: true });
   } catch (err) {
     next(err);
@@ -316,6 +312,7 @@ router.post("/resend-verification", resendVerificationLimiter, async (req: Reque
     });
 
     console.log(`[VERIFY] Resend ${user.email} → ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
+    await auditLog({ userId: user.id, orgId: user.orgId, action: "VERIFICATION_EMAIL_RESENT", ipAddress: req.ip, userAgent: req.get("User-Agent"), detail: user.email });
 
     res.json(GENERIC);
 
@@ -372,7 +369,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req: Request, res:
       console.log(`[DEV] Reset link: ${process.env.FRONTEND_URL}/forgot-password?token=${resetToken}`);
     }
 
-    await auditLog({ userId: user.id, orgId: user.orgId, action: "PASSWORD_RESET_REQUESTED", ipAddress: req.ip });
+    await auditLog({ userId: user.id, orgId: user.orgId, action: "PASSWORD_RESET_REQUESTED", ipAddress: req.ip, userAgent: req.get("User-Agent") });
 
     return res.json(GENERIC_RESPONSE);
 
@@ -402,7 +399,7 @@ router.post("/reset-password", async (req: Request, res: Response, next: NextFun
       prisma.session.deleteMany({ where: { userId: record.userId } }), // Forcer reconnexion partout
     ]);
 
-    await auditLog({ userId: record.userId, action: "PASSWORD_RESET_SUCCESS", ipAddress: req.ip });
+    await auditLog({ userId: record.userId, action: "PASSWORD_RESET_SUCCESS", ipAddress: req.ip, userAgent: req.get("User-Agent") });
 
     return res.json({ message: "Mot de passe réinitialisé avec succès." });
 
@@ -426,6 +423,8 @@ router.get("/verify-email", async (req: Request, res: Response, next: NextFuncti
       prisma.user.update({ where: { id: record.userId }, data: { isVerified: true } }),
       prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
     ]);
+
+    await auditLog({ userId: record.userId, action: "EMAIL_VERIFIED", ipAddress: req.ip, userAgent: req.get("User-Agent") });
 
     return res.json({ success: true });
 
