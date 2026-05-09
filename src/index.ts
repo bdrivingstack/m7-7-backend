@@ -95,6 +95,17 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Test email — à supprimer après validation
+app.get("/api/test-email", async (_req, res) => {
+  const { sendVerificationEmail } = await import("./lib/emailService.js");
+  const result = await sendVerificationEmail({
+    to:        process.env.SMTP_USER || "",
+    firstName: "Test",
+    token:     "test-token-123",
+  });
+  res.json(result);
+});
+
 // ─── GESTION ERREURS ─────────────────────────────────────────────────────────
 app.use(errorHandler);
 
