@@ -9,16 +9,19 @@ const APP_URL       = process.env.FRONTEND_URL        || "http://localhost:8080"
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
 
-console.log(`[emailService] SMTP_USER=${SMTP_USER || "MANQUANT"} SMTP_PASS=${SMTP_PASS ? "***défini***" : "MANQUANT"}`);
+console.log(`[emailService] SMTP_USER=${SMTP_USER || "MANQUANT"} SMTP_PASS=${SMTP_PASS ? "***défini***" : "MANQUANT"} PORT=${process.env.SMTP_PORT || 465}`);
 
 const transporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST || "smtp.gmail.com",
-  port:   Number(process.env.SMTP_PORT) || 587,
-  secure: false, // TLS via STARTTLS sur port 587
+  host:               process.env.SMTP_HOST || "smtp.gmail.com",
+  port:               Number(process.env.SMTP_PORT) || 465,
+  secure:             process.env.SMTP_SECURE === "true" || !process.env.SMTP_PORT,
   auth: {
     user: SMTP_USER,
     pass: SMTP_PASS,
   },
+  connectionTimeout:  10000,
+  greetingTimeout:    10000,
+  socketTimeout:      10000,
 });
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
