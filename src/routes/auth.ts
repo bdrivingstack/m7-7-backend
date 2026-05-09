@@ -5,7 +5,7 @@ import { authenticator } from "otplib";
 import { prisma } from "../lib/prisma.js";
 import { encrypt, decrypt, generateSecureToken } from "../lib/security.js";
 import { Errors, AppError } from "../middleware/errorHandler.js";
-import { loginLimiter, registerLimiter, forgotPasswordLimiter } from "../middleware/rateLimiter.js";
+import { loginLimiter, registerLimiter, forgotPasswordLimiter, resendVerificationLimiter } from "../middleware/rateLimiter.js";
 import {
   RegisterSchema, LoginSchema, MfaVerifySchema,
   ForgotPasswordSchema, ResetPasswordSchema,
@@ -113,24 +113,19 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
     // 7. Envoyer l'email de vérification
     // Toujours logguer le lien pour pouvoir vérifier manuellement via les logs Railway
     console.log(`[VERIFY] ${user.email} → ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
-    try {
-      const emailResult = await sendVerificationEmail({
-        to:        user.email,
-        firstName: user.firstName,
-        token:     verifyToken,
-      });
-      if (emailResult.success) {
-        console.log(`[EMAIL] ✅ Email vérification envoyé à ${user.email} (id: ${emailResult.id})`);
-      } else {
-        console.error(`[EMAIL] ❌ Échec envoi à ${user.email} :`, emailResult.error);
-      }
-    } catch (emailErr) {
-      console.error("[EMAIL] Erreur envoi vérification :", emailErr);
-    }
 
-    return res.status(201).json({
+    // Répondre immédiatement — l'email part en arrière-plan sans bloquer
+    res.status(201).json({
       message: "Compte créé ! Vérifiez votre boîte mail pour activer votre compte.",
     });
+
+    sendVerificationEmail({ to: user.email, firstName: user.firstName, token: verifyToken })
+      .then(r => r.success
+        ? console.log(`[EMAIL] ✅ Vérification envoyée à ${user.email} (${r.id})`)
+        : console.error(`[EMAIL] ❌ Échec ${user.email}:`, r.error))
+      .catch(err => console.error("[EMAIL] Exception:", err?.message));
+
+    return;
 
   } catch (err) {
     next(err);
@@ -288,6 +283,49 @@ router.post("/logout", async (req: Request, res: Response, next: NextFunction) =
     res.clearCookie("session_token");
     res.clearCookie("refresh_token");
     return res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── RENVOI EMAIL DE VÉRIFICATION ────────────────────────────────────────────
+router.post("/resend-verification", resendVerificationLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const GENERIC = { message: "Si votre compte existe et n'est pas vérifié, un email vous a été envoyé." };
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    if (!email) return res.json(GENERIC);
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || user.isVerified) return res.json(GENERIC);
+
+    // Invalider les anciens tokens non utilisés
+    await prisma.verificationToken.updateMany({
+      where: { userId: user.id, type: "EMAIL_VERIFY", usedAt: null },
+      data:  { usedAt: new Date() },
+    });
+
+    // Nouveau token 24h
+    const verifyToken = generateSecureToken();
+    await prisma.verificationToken.create({
+      data: {
+        userId:    user.id,
+        token:     verifyToken,
+        type:      "EMAIL_VERIFY",
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+
+    console.log(`[VERIFY] Resend ${user.email} → ${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`);
+
+    res.json(GENERIC);
+
+    sendVerificationEmail({ to: user.email, firstName: user.firstName, token: verifyToken })
+      .then(r => r.success
+        ? console.log(`[EMAIL] ✅ Renvoi vérification à ${user.email}`)
+        : console.error(`[EMAIL] ❌ Échec renvoi ${user.email}:`, r.error))
+      .catch(err => console.error("[EMAIL] Exception:", err?.message));
+
+    return;
   } catch (err) {
     next(err);
   }

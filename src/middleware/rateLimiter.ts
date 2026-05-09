@@ -31,6 +31,18 @@ export const registerLimiter = rateLimit({
   },
 });
 
+// ─── Rate limiter RESEND VERIFICATION ────────────────────────────────────────
+export const resendVerificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 heure
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    code: "RATE_LIMITED",
+    message: "Trop de demandes. Réessayez dans 1 heure.",
+  },
+});
+
 // ─── Rate limiter FORGOT PASSWORD ────────────────────────────────────────────
 export const forgotPasswordLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 heure
