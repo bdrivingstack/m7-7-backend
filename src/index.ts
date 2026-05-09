@@ -23,6 +23,8 @@ import { errorHandler } from "./middleware/errorHandler.js";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+app.set("trust proxy", 1); // Railway reverse proxy
+
 // ─── CORS — doit être EN PREMIER avant Helmet ─────────────────────────────────
 const ALLOWED_ORIGINS = [
   process.env.FRONTEND_URL,
