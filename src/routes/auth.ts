@@ -10,7 +10,7 @@ import {
   RegisterSchema, LoginSchema, MfaVerifySchema,
   ForgotPasswordSchema, ResetPasswordSchema,
 } from "../lib/validation.js";
-import { sendVerificationEmail, sendPasswordResetEmail } from "../lib/emailService.js";
+import { sendVerificationEmail, sendPasswordResetEmail, sendAccountAlreadyExistsEmail } from "../lib/emailService.js";
 
 const router = Router();
 
@@ -52,8 +52,13 @@ router.post("/register", registerLimiter, async (req: Request, res: Response, ne
     // 2. Email déjà utilisé ? (réponse vague pour ne pas révéler les comptes existants)
     const existing = await prisma.user.findUnique({ where: { email: body.email } });
     if (existing) {
-      // On simule l'envoi d'email pour éviter l'énumération
-      // En prod : envoyer un email "vous avez déjà un compte"
+      // Sécurité : ne jamais révéler qu'un compte existe côté frontend
+      // On envoie un email discret à l'utilisateur existant
+      try {
+        await sendAccountAlreadyExistsEmail({ to: existing.email, firstName: existing.firstName });
+      } catch (emailErr) {
+        console.error("[EMAIL] Erreur envoi compte existant :", emailErr);
+      }
       return res.status(200).json({
         message: "Si cet email n'est pas encore utilisé, vous recevrez un email de confirmation.",
       });

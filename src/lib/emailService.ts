@@ -558,3 +558,30 @@ export async function sendOverdueInternalAlert(params: {
     }),
   });
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 10. COMPTE DÉJÀ EXISTANT (tentative d'inscription avec email connu)
+// ════════════════════════════════════════════════════════════════════════════
+
+export async function sendAccountAlreadyExistsEmail(params: {
+  to:        string;
+  firstName: string;
+}): Promise<SendResult> {
+  return send({
+    to:      params.to,
+    subject: "Tentative d'inscription — Vous avez déjà un compte M7Sept",
+    html:    baseTemplate({
+      preheader: "Une inscription a été tentée avec votre adresse email",
+      title:     `Bonjour ${params.firstName} 👋`,
+      body: `
+        <p>Quelqu'un (probablement vous) a tenté de créer un compte M7Sept avec cette adresse email.</p>
+        <p>Bonne nouvelle : <strong>vous avez déjà un compte</strong> associé à cette adresse.</p>
+        <p>Cliquez sur le bouton ci-dessous pour vous connecter directement.</p>
+        <p style="color:#888;font-size:13px">Si vous avez oublié votre mot de passe, vous pourrez le réinitialiser depuis la page de connexion.</p>
+        <p style="color:#888;font-size:13px">Si vous n'êtes pas à l'origine de cette tentative, ignorez cet email — votre compte est en sécurité.</p>
+      `,
+      ctaLabel: "Se connecter",
+      ctaUrl:   `${APP_URL}/login`,
+    }),
+  });
+}
