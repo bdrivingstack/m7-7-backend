@@ -2,26 +2,45 @@ import nodemailer from "nodemailer";
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
-const FROM_DEFAULT  = process.env.EMAIL_FROM         || "M7Sept <noreply@gmail.com>";
-const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES || process.env.EMAIL_FROM || "M7Sept <noreply@gmail.com>";
-const APP_URL       = process.env.FRONTEND_URL        || "http://localhost:8080";
+const SMTP_HOST        = process.env.SMTP_HOST        || "";
+const SMTP_PORT        = Number(process.env.SMTP_PORT) || 465;
+const SMTP_SECURE      = process.env.SMTP_SECURE      === "true";
+const SMTP_REQUIRE_TLS = process.env.SMTP_REQUIRE_TLS === "true" || SMTP_PORT === 587;
+const SMTP_USER        = process.env.SMTP_USER        || "";
+const SMTP_PASS        = process.env.SMTP_PASS        || "";
 
-const SMTP_USER = process.env.SMTP_USER || "";
-const SMTP_PASS = process.env.SMTP_PASS || "";
+const FROM_DEFAULT  = process.env.EMAIL_FROM          || `M7Sept <${SMTP_USER}>`;
+const FROM_INVOICES = process.env.EMAIL_FROM_INVOICES  || FROM_DEFAULT;
+const APP_URL       = process.env.FRONTEND_URL         || "http://localhost:8080";
 
-console.log(`[emailService] SMTP_USER=${SMTP_USER || "MANQUANT"} SMTP_PASS=${SMTP_PASS ? "***défini***" : "MANQUANT"} PORT=${process.env.SMTP_PORT || 465}`);
+// Logs démarrage — jamais le mot de passe
+console.log("[emailService] SMTP_HOST=",        SMTP_HOST        || "MANQUANT");
+console.log("[emailService] SMTP_PORT=",        SMTP_PORT);
+console.log("[emailService] SMTP_SECURE=",      SMTP_SECURE);
+console.log("[emailService] SMTP_REQUIRE_TLS=", SMTP_REQUIRE_TLS);
+console.log("[emailService] SMTP_USER=",        SMTP_USER        || "MANQUANT");
 
 const transporter = nodemailer.createTransport({
-  host:               process.env.SMTP_HOST || "smtp.gmail.com",
-  port:               Number(process.env.SMTP_PORT) || 465,
-  secure:             process.env.SMTP_SECURE === "true" || !process.env.SMTP_PORT,
+  host:        SMTP_HOST,
+  port:        SMTP_PORT,
+  secure:      SMTP_SECURE,
+  requireTLS:  SMTP_REQUIRE_TLS,
   auth: {
     user: SMTP_USER,
     pass: SMTP_PASS,
   },
-  connectionTimeout:  10000,
-  greetingTimeout:    10000,
-  socketTimeout:      10000,
+  connectionTimeout: 10000,
+  greetingTimeout:   10000,
+  socketTimeout:     10000,
+});
+
+// Vérification connexion SMTP au démarrage
+transporter.verify((error) => {
+  if (error) {
+    console.error("[emailService] SMTP verify FAILED:", error.message);
+  } else {
+    console.log("[emailService] SMTP ready ✅");
+  }
 });
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
