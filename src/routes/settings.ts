@@ -6,6 +6,7 @@ import { authorize } from "../middleware/authorize.js";
 import { encrypt, decrypt } from "../lib/security.js";
 import { auditLog } from "../lib/audit.js";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 
 const router = Router();
 router.use(authenticate);
@@ -223,6 +224,135 @@ router.delete("/webhooks/:id", authorize("settings","update"), async (req, res, 
     await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"WEBHOOK_DELETED",
       resource:"webhook", resourceId:req.params.id, ipAddress:req.ip, userAgent:req.get("User-Agent") });
     res.json({ success: true });
+  } catch(err){ next(err); }
+});
+
+// ─── GET /api/settings/email ─────────────────────────────────────────────────
+router.get("/email", authorize("settings","read"), async (req, res, next) => {
+  try {
+    const integration = await prisma.integration.findFirst({
+      where: { orgId: req.user.orgId, type: "CUSTOM" },
+      select: { id:true, configJson:true, isActive:true, updatedAt:true },
+    });
+    if (!integration) {
+      return res.json({ data: null });
+    }
+    res.json({ data: {
+      id:        integration.id,
+      isActive:  integration.isActive,
+      updatedAt: integration.updatedAt,
+      ...(integration.configJson as object ?? {}),
+    }});
+  } catch(err){ next(err); }
+});
+
+// ─── PATCH /api/settings/email ────────────────────────────────────────────────
+const SmtpConfigSchema = z.object({
+  senderName:  z.string().max(200).optional(),
+  senderEmail: z.string().email().optional().or(z.literal("")),
+  replyTo:     z.string().email().optional().or(z.literal("")),
+  smtpEnabled: z.boolean().optional(),
+  smtpHost:    z.string().max(200).optional(),
+  smtpPort:    z.number().int().min(1).max(65535).optional(),
+  smtpSecurity:z.enum(["STARTTLS","TLS","NONE"]).optional(),
+  smtpUser:    z.string().max(200).optional(),
+  smtpPass:    z.string().max(1000).optional(),
+  signature:   z.string().max(2000).optional(),
+  notifSendCopy:    z.boolean().optional(),
+  notifPaymentAlert: z.boolean().optional(),
+  notifWeeklySummary:z.boolean().optional(),
+});
+
+router.patch("/email", authorize("settings","update"), async (req, res, next) => {
+  try {
+    const body = SmtpConfigSchema.parse(req.body);
+    const { smtpPass, ...rest } = body;
+    const configJson: Record<string, unknown> = { ...rest };
+
+    // One CUSTOM integration per org (unique constraint on orgId+type)
+    const existing = await prisma.integration.findFirst({
+      where: { orgId: req.user.orgId, type: "CUSTOM" },
+      select: { id: true },
+    });
+
+    if (existing) {
+      const updateData: any = { name: "smtp_config", configJson, isActive: true };
+      if (smtpPass) updateData.credentialEncrypted = encrypt(smtpPass);
+      await prisma.integration.update({ where: { id: existing.id }, data: updateData });
+    } else {
+      const createData: any = {
+        orgId: req.user.orgId, type: "CUSTOM", name: "smtp_config",
+        isActive: true, configJson,
+      };
+      if (smtpPass) createData.credentialEncrypted = encrypt(smtpPass);
+      await prisma.integration.create({ data: createData });
+    }
+
+    await auditLog({ userId:req.user.id, orgId:req.user.orgId, action:"EMAIL_SETTINGS_UPDATED", ipAddress:req.ip, userAgent:req.get("User-Agent") });
+    res.json({ success: true });
+  } catch(err){ next(err); }
+});
+
+// ─── POST /api/settings/email/test ────────────────────────────────────────────
+router.post("/email/test", authorize("settings","update"), async (req, res, next) => {
+  try {
+    const { smtpHost, smtpPort, smtpSecurity, smtpUser, smtpPass } = z.object({
+      smtpHost:     z.string().min(1),
+      smtpPort:     z.number().int().min(1).max(65535),
+      smtpSecurity: z.enum(["STARTTLS","TLS","NONE"]),
+      smtpUser:     z.string().min(1),
+      smtpPass:     z.string().min(1),
+    }).parse(req.body);
+
+    const transporter = nodemailer.createTransport({
+      host:   smtpHost,
+      port:   smtpPort,
+      secure: smtpSecurity === "TLS",
+      requireTLS: smtpSecurity === "STARTTLS",
+      auth:   { user: smtpUser, pass: smtpPass },
+      connectionTimeout: 10000,
+      socketTimeout:     10000,
+    });
+
+    await transporter.verify();
+    res.json({ success: true, message: "Connexion SMTP réussie." });
+  } catch(err: any) {
+    res.status(400).json({ success: false, message: err?.message ?? "Connexion SMTP échouée." });
+  }
+});
+
+// ─── GET /api/settings/audit-logs ────────────────────────────────────────────
+router.get("/audit-logs", authorize("settings","read"), async (req, res, next) => {
+  try {
+    const limit  = Math.min(parseInt((req.query.limit  as string) || "100", 10), 200);
+    const offset = parseInt((req.query.offset as string) || "0", 10);
+    const search = (req.query.search as string) || "";
+
+    const where: any = { orgId: req.user.orgId };
+    if (search) {
+      where.OR = [
+        { action:   { contains: search, mode: "insensitive" } },
+        { resource: { contains: search, mode: "insensitive" } },
+        { detail:   { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    const [logs, total] = await prisma.$transaction([
+      prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take:    limit,
+        skip:    offset,
+        select: {
+          id: true, action: true, resource: true, resourceId: true,
+          detail: true, ipAddress: true, createdAt: true,
+          user: { select: { firstName: true, lastName: true, email: true } },
+        },
+      }),
+      prisma.auditLog.count({ where }),
+    ]);
+
+    res.json({ data: logs, total });
   } catch(err){ next(err); }
 });
 
