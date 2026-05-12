@@ -56,6 +56,23 @@ export function errorHandler(
     });
   }
 
+  // Erreur Prisma connue (contrainte unique, foreign key, colonne manquante…)
+  if (err.constructor?.name === "PrismaClientKnownRequestError") {
+    const pe = err as any;
+    console.error("[PRISMA ERROR]", pe.code, pe.meta, pe.message);
+    if (pe.code === "P2002") {
+      return res.status(409).json({ code: "DUPLICATE", message: "Cette valeur existe déjà." });
+    }
+    if (pe.code === "P2025") {
+      return res.status(404).json({ code: "NOT_FOUND", message: "Ressource introuvable." });
+    }
+  }
+
+  if (err.constructor?.name === "PrismaClientValidationError") {
+    console.error("[PRISMA VALIDATION]", err.message);
+    return res.status(422).json({ code: "VALIDATION_ERROR", message: "Données invalides." });
+  }
+
   // Erreur inconnue — NE PAS révéler les détails en production
   console.error("[SERVER ERROR]", err);
   return res.status(500).json({
