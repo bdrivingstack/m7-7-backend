@@ -17,6 +17,7 @@ import { documentsRouter }   from "./routes/documents.js";
 import { einvoicingRouter }  from "./routes/einvoicing.js";
 import { urssafRouter }      from "./routes/urssaf.js";
 import { stripeRouter }      from "./routes/stripe.js";
+import { sirenRouter }       from "./routes/siren.js";
 import { globalLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
@@ -89,6 +90,7 @@ app.use("/api/settings",    settingsRouter);
 app.use("/api/documents",   documentsRouter);
 app.use("/api/einvoicing",  einvoicingRouter);
 app.use("/api/urssaf",      urssafRouter);
+app.use("/api/siren-search", sirenRouter);
 
 // Health check
 app.get("/api/health", (_req, res) => {
