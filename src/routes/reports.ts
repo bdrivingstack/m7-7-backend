@@ -13,71 +13,136 @@ const PeriodSchema = z.object({
 });
 
 // ─── GET /api/reports/dashboard ───────────────────────────────────────────────
-// Chiffres clés pour le dashboard (temps réel)
 router.get("/dashboard", authorize("reports","read"), async (req, res, next) => {
   try {
-    const orgId = req.user.orgId;
-    const now   = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfYear  = new Date(now.getFullYear(), 0, 1);
+    const orgId  = req.user.orgId;
+    const period = (req.query.period as string) ?? "month";
+    const now    = new Date();
+
+    // ─── Bornes de la période sélectionnée ───────────────────────────────
+    let periodStart: Date, prevStart: Date, prevEnd: Date;
+    if (period === "year") {
+      periodStart = new Date(now.getFullYear(), 0, 1);
+      prevStart   = new Date(now.getFullYear() - 1, 0, 1);
+      prevEnd     = new Date(now.getFullYear(), 0, 0, 23, 59, 59);
+    } else if (period === "quarter") {
+      const q   = Math.floor(now.getMonth() / 3);
+      periodStart = new Date(now.getFullYear(), q * 3, 1);
+      prevStart   = new Date(now.getFullYear(), (q - 1) * 3, 1);
+      prevEnd     = new Date(now.getFullYear(), q * 3, 0, 23, 59, 59);
+    } else {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      prevStart   = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      prevEnd     = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+    }
+    const since12m = new Date(now.getFullYear() - 1, now.getMonth(), 1);
 
     const [
-      invoiceStats,
-      overdueInvoices,
-      monthRevenue,
-      yearRevenue,
-      topCustomers,
-      recentInvoices,
-      pendingQuotes,
+      currentRevenue, prevRevenue, invoicesByStatus,
+      overdueInvoices, topCustomersRaw, recentInvoicesRaw,
+      quoteStats, paidForDSO, monthly12m,
     ] = await Promise.all([
-      // Répartition statuts factures
-      prisma.invoice.groupBy({ by:["status"], where:{ orgId, deletedAt:null },
-        _sum:{ totalTTC:true }, _count:{ id:true } }),
-
-      // Factures en retard
-      prisma.invoice.findMany({ where:{ orgId, deletedAt:null, status:{ notIn:["PAID","CANCELLED","CREDITED"] },
-        dueDate:{ lt:now } },
-        select:{ id:true, number:true, totalDue:true, dueDate:true,
-          customer:{ select:{ id:true, name:true } } },
-        orderBy:{ dueDate:"asc" }, take:5 }),
-
-      // CA mois en cours
-      prisma.invoice.aggregate({ where:{ orgId, deletedAt:null, status:"PAID",
-        paidAt:{ gte:startOfMonth } }, _sum:{ totalHT:true, totalTTC:true } }),
-
-      // CA année en cours
-      prisma.invoice.aggregate({ where:{ orgId, deletedAt:null, status:"PAID",
-        paidAt:{ gte:startOfYear } }, _sum:{ totalHT:true, totalTTC:true } }),
-
-      // Top 5 clients par CA
-      prisma.invoice.groupBy({ by:["customerId"],
-        where:{ orgId, deletedAt:null, status:"PAID", paidAt:{ gte:startOfYear } },
-        _sum:{ totalTTC:true }, orderBy:{ _sum:{ totalTTC:"desc" } }, take:5 }),
-
-      // 5 dernières factures
-      prisma.invoice.findMany({ where:{ orgId, deletedAt:null },
-        orderBy:{ createdAt:"desc" }, take:5,
-        include:{ customer:{ select:{ id:true, name:true } } } }),
-
-      // Devis en attente
-      prisma.quote.count({ where:{ orgId, deletedAt:null, status:"SENT" } }),
+      prisma.invoice.aggregate({ where:{ orgId, deletedAt:null, status:"PAID", paidAt:{ gte:periodStart } },
+        _sum:{ totalHT:true, totalTTC:true } }),
+      prisma.invoice.aggregate({ where:{ orgId, deletedAt:null, status:"PAID", paidAt:{ gte:prevStart, lte:prevEnd } },
+        _sum:{ totalTTC:true } }),
+      prisma.invoice.groupBy({ by:["status"], where:{ orgId, deletedAt:null }, _count:{ id:true } }),
+      prisma.invoice.findMany({ where:{ orgId, deletedAt:null, status:{ notIn:["PAID","CANCELLED","CREDITED"] }, dueDate:{ lt:now } },
+        select:{ id:true, number:true, totalDue:true, dueDate:true, customer:{ select:{ id:true, name:true } } },
+        orderBy:{ dueDate:"asc" }, take:10 }),
+      prisma.invoice.groupBy({ by:["customerId"], where:{ orgId, deletedAt:null, status:"PAID", paidAt:{ gte:periodStart } },
+        _sum:{ totalTTC:true }, _count:{ id:true }, orderBy:{ _sum:{ totalTTC:"desc" } }, take:5 }),
+      prisma.invoice.findMany({ where:{ orgId, deletedAt:null }, orderBy:{ createdAt:"desc" }, take:5,
+        select:{ id:true, number:true, totalTTC:true, totalDue:true, status:true, createdAt:true,
+          customer:{ select:{ name:true } } } }),
+      prisma.quote.groupBy({ by:["status"], where:{ orgId, deletedAt:null }, _count:{ id:true } }),
+      prisma.invoice.findMany({ where:{ orgId, deletedAt:null, status:"PAID", paidAt:{ gte:periodStart } },
+        select:{ issueDate:true, paidAt:true } }),
+      prisma.invoice.findMany({ where:{ orgId, deletedAt:null, status:"PAID", paidAt:{ gte:since12m } },
+        select:{ totalTTC:true, paidAt:true }, orderBy:{ paidAt:"asc" } }),
     ]);
 
-    // Enrichir top clients avec noms
-    const customerIds = topCustomers.map(c => c.customerId);
-    const customers   = await prisma.customer.findMany({ where:{ id:{ in:customerIds } },
-      select:{ id:true, name:true } });
-    const customerMap = Object.fromEntries(customers.map(c => [c.id, c.name]));
+    // Enrichir top clients
+    const custIds  = topCustomersRaw.map(c => c.customerId);
+    const custDocs = custIds.length > 0
+      ? await prisma.customer.findMany({ where:{ id:{ in:custIds } }, select:{ id:true, name:true } })
+      : [];
+    const custMap  = Object.fromEntries(custDocs.map(c => [c.id, c.name]));
 
-    res.json({ data: {
-      invoiceStats,
-      overdueInvoices,
-      monthRevenue:  { ht: monthRevenue._sum.totalHT || 0, ttc: monthRevenue._sum.totalTTC || 0 },
-      yearRevenue:   { ht: yearRevenue._sum.totalHT  || 0, ttc: yearRevenue._sum.totalTTC  || 0 },
-      topCustomers:  topCustomers.map(c => ({ customerId:c.customerId, name:customerMap[c.customerId], totalTTC:c._sum.totalTTC })),
-      recentInvoices,
-      pendingQuotes,
-    }});
+    // KPIs
+    const curTTC     = Number(currentRevenue._sum.totalTTC ?? 0);
+    const prevTTC    = Number(prevRevenue._sum.totalTTC    ?? 0);
+    const growth     = prevTTC > 0 ? Math.round((curTTC - prevTTC) / prevTTC * 100) : 0;
+    const statusMap  = Object.fromEntries(invoicesByStatus.map(s => [s.status, s._count.id]));
+    const overdueTotal = overdueInvoices.reduce((s, i) => s + Number(i.totalDue ?? 0), 0);
+
+    let dso = 0;
+    if (paidForDSO.length > 0) {
+      const days = paidForDSO.reduce((s, inv) => {
+        if (!inv.paidAt || !inv.issueDate) return s;
+        return s + (new Date(inv.paidAt).getTime() - new Date(inv.issueDate).getTime()) / 86400000;
+      }, 0);
+      dso = Math.round(days / paidForDSO.length);
+    }
+
+    const quoteSent     = quoteStats.find(s => s.status === "SENT")?._count.id     ?? 0;
+    const quoteAccepted = quoteStats.find(s => s.status === "ACCEPTED")?._count.id ?? 0;
+    const convRate      = (quoteSent + quoteAccepted) > 0
+      ? Math.round(quoteAccepted / (quoteSent + quoteAccepted) * 100) : 0;
+
+    // Graphique CA 12 mois
+    const MONTHS_FR = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"];
+    const byMonth: Record<string, number> = {};
+    for (const inv of monthly12m) {
+      const key = inv.paidAt!.toISOString().slice(0, 7);
+      byMonth[key] = (byMonth[key] ?? 0) + Number(inv.totalTTC);
+    }
+    const revenueChart = Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, revenue]) => ({
+        month: MONTHS_FR[parseInt(key.split("-")[1]) - 1],
+        revenue: Math.round(revenue),
+        expenses: 0,
+      }));
+
+    res.json({
+      kpis: {
+        revenueMonthly:      Math.round(curTTC * 100) / 100,
+        revenueGrowth:       growth,
+        cashIn:              Math.round(curTTC * 100) / 100,
+        cashOut:             0,
+        netResult:           Math.round(Number(currentRevenue._sum.totalHT ?? 0) * 100) / 100,
+        margin:              0,
+        unpaid:              Math.round(overdueTotal * 100) / 100,
+        unpaidCount:         overdueInvoices.length,
+        dso,
+        invoicesPaid:        statusMap["PAID"]   ?? 0,
+        invoicesPending:     (statusMap["SENT"]  ?? 0) + (statusMap["DRAFT"] ?? 0),
+        invoicesOverdue:     overdueInvoices.length,
+        quoteConversionRate: convRate,
+      },
+      revenueChart,
+      cashflow: [],
+      alerts: overdueInvoices.slice(0, 5).map(inv => ({
+        type:        "danger",
+        title:       `Facture en retard : ${inv.number}`,
+        description: `${inv.customer.name} — ${Math.round(Number(inv.totalDue))}€ échue le ${new Date(inv.dueDate!).toLocaleDateString("fr-FR")}`,
+      })),
+      aiRecommendations: [],
+      topProducts:       [],
+      topClients: topCustomersRaw.map(c => ({
+        name:     custMap[c.customerId] ?? "—",
+        revenue:  Math.round(Number(c._sum.totalTTC ?? 0) * 100) / 100,
+        invoices: c._count.id,
+      })),
+      recentInvoices: recentInvoicesRaw.map(inv => ({
+        id:     inv.number,
+        client: inv.customer.name,
+        date:   inv.createdAt,
+        amount: Math.round(Number(inv.totalTTC) * 100) / 100,
+        status: inv.status.toLowerCase(),
+      })),
+    });
   } catch(err){ next(err); }
 });
 
