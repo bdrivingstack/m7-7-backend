@@ -61,6 +61,23 @@ const PaginationSchema = z.object({
   sortDir: z.enum(["asc", "desc"]).default("asc"),
 });
 
+// ─── SELECT sûr — exclut les colonnes non encore migrées (urssafSap*) ────────
+// À enrichir avec urssafSapEnabled / urssafSapRef après application de la migration
+const CUSTOMER_SELECT = {
+  id: true, orgId: true, name: true, firstName: true, lastName: true,
+  isCompany: true, reference: true, siret: true, siren: true, tvaNumber: true,
+  nafCode: true, email: true, phone: true, website: true,
+  address: true, address2: true, city: true, postalCode: true, country: true,
+  deliveryAddress: true, deliveryAddress2: true, deliveryCity: true,
+  deliveryPostalCode: true, deliveryCountry: true,
+  defaultVatRate: true, defaultPaymentTerms: true, creditLimit: true,
+  currency: true, discount: true, portalEnabled: true, portalEmail: true,
+  notes: true, tags: true, balance: true, deletedAt: true,
+  createdAt: true, updatedAt: true,
+} as const;
+
+const AUTH_SELECT = { id: true, orgId: true } as const;
+
 // ─── GET /api/customers ───────────────────────────────────────────────────────
 
 router.get("/", authorize("customers", "read"), async (req: Request, res: Response, next: NextFunction) => {
@@ -109,8 +126,15 @@ router.get("/:id", authorize("customers", "read"), async (req: Request, res: Res
   try {
     const customer = await prisma.customer.findUnique({
       where: { id: req.params.id },
-      include: {
-        contacts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
+      select: {
+        ...CUSTOMER_SELECT,
+        contacts: {
+          orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+          select: {
+            id: true, firstName: true, lastName: true, email: true,
+            phone: true, role: true, isPrimary: true, createdAt: true,
+          },
+        },
         _count: { select: { invoices: true, quotes: true, payments: true } },
       },
     });
@@ -126,12 +150,15 @@ router.post("/", authorize("customers", "create"), async (req: Request, res: Res
     const body = CustomerSchema.parse(req.body);
 
     const customer = await prisma.customer.create({
-      data: { ...body, orgId: req.user.orgId }, // orgId TOUJOURS depuis req.user
+      data:   { ...body, orgId: req.user.orgId },
+      select: CUSTOMER_SELECT,
     });
 
-    await auditLog({ userId: req.user.id, orgId: req.user.orgId,
+    await auditLog({
+      userId: req.user.id, orgId: req.user.orgId,
       action: "CUSTOMER_CREATED", resource: "customer", resourceId: customer.id,
-      ipAddress: req.ip });
+      ipAddress: req.ip,
+    });
 
     res.status(201).json({ data: customer });
   } catch (err) { next(err); }
@@ -141,15 +168,24 @@ router.post("/", authorize("customers", "create"), async (req: Request, res: Res
 
 router.patch("/:id", authorize("customers", "update"), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const existing = await prisma.customer.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.customer.findUnique({
+      where:  { id: req.params.id },
+      select: AUTH_SELECT,
+    });
     requireSameOrg(req, existing);
 
-    const body = CustomerSchema.partial().parse(req.body);
-    const customer = await prisma.customer.update({ where: { id: req.params.id }, data: body });
+    const body     = CustomerSchema.partial().parse(req.body);
+    const customer = await prisma.customer.update({
+      where:  { id: req.params.id },
+      data:   body,
+      select: CUSTOMER_SELECT,
+    });
 
-    await auditLog({ userId: req.user.id, orgId: req.user.orgId,
+    await auditLog({
+      userId: req.user.id, orgId: req.user.orgId,
       action: "CUSTOMER_UPDATED", resource: "customer", resourceId: customer.id,
-      ipAddress: req.ip });
+      ipAddress: req.ip,
+    });
 
     res.json({ data: customer });
   } catch (err) { next(err); }
@@ -159,33 +195,40 @@ router.patch("/:id", authorize("customers", "update"), async (req: Request, res:
 
 router.delete("/:id", authorize("customers", "delete"), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const existing = await prisma.customer.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.customer.findUnique({
+      where:  { id: req.params.id },
+      select: AUTH_SELECT,
+    });
     requireSameOrg(req, existing);
 
-    // Soft delete — conservation historique comptable
     await prisma.customer.update({
-      where: { id: req.params.id },
-      data:  { deletedAt: new Date() },
+      where:  { id: req.params.id },
+      data:   { deletedAt: new Date() },
+      select: { id: true },
     });
 
-    await auditLog({ userId: req.user.id, orgId: req.user.orgId,
+    await auditLog({
+      userId: req.user.id, orgId: req.user.orgId,
       action: "CUSTOMER_DELETED", resource: "customer", resourceId: req.params.id,
-      ipAddress: req.ip });
+      ipAddress: req.ip,
+    });
 
     res.json({ success: true });
   } catch (err) { next(err); }
 });
 
-// ─── CONTACTS ─────────────────────────────────────────────────────────────────
+// ─── POST /api/customers/:id/contacts ────────────────────────────────────────
 
 router.post("/:id/contacts", authorize("customers", "update"), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
+    const customer = await prisma.customer.findUnique({
+      where:  { id: req.params.id },
+      select: AUTH_SELECT,
+    });
     requireSameOrg(req, customer);
 
     const body = ContactSchema.parse(req.body);
 
-    // Si isPrimary, retirer l'ancien primary
     if (body.isPrimary) {
       await prisma.customerContact.updateMany({
         where: { customerId: req.params.id },
@@ -201,9 +244,14 @@ router.post("/:id/contacts", authorize("customers", "update"), async (req: Reque
   } catch (err) { next(err); }
 });
 
+// ─── DELETE /api/customers/:id/contacts/:contactId ────────────────────────────
+
 router.delete("/:id/contacts/:contactId", authorize("customers", "update"), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
+    const customer = await prisma.customer.findUnique({
+      where:  { id: req.params.id },
+      select: AUTH_SELECT,
+    });
     requireSameOrg(req, customer);
     await prisma.customerContact.delete({ where: { id: req.params.contactId } });
     res.json({ success: true });
