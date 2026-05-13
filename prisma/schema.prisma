@@ -168,6 +168,11 @@ model Org {
   einvoiceDocs      EInvoiceDocument[]
   urssafConnections UrssafConnection[]
   auditLogs         AuditLog[]
+  financialImports  FinancialImport[]
+  bankTransactions  BankTransaction[]
+  vatLearningRules  VatLearningRule[]
+  activityProfiles  OrgActivityProfile[]
+  extractedInvoices ExtractedInvoice[]
 
   @@index([plan])
   @@index([siret])
@@ -809,7 +814,8 @@ model Document {
   deletedAt    DateTime?
   createdAt    DateTime @default(now())
 
-  org          Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org             Org               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  bankTransactions BankTransaction[] @relation("BankTransactionDocument")
 
   @@index([orgId])
   @@index([invoiceId])
@@ -940,6 +946,172 @@ model WebhookDelivery {
 
   @@index([webhookId])
   @@index([event])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// INTELLIGENCE COMPTABLE — Imports bancaires, TVA, OCR
+// ════════════════════════════════════════════════════════════════════════════
+
+model FinancialImport {
+  id            String   @id @default(cuid())
+  orgId         String
+  documentId    String?
+  source        String   // BANK_CSV | BANK_XLSX | BANK_OFX | BANK_QIF | BANK_CAMT053 | BANK_CAMT054 | BANK_MT940 | BANK_CFONB120
+  status        String   @default("PENDING") // PENDING | PARSED | NEEDS_REVIEW | DONE | ERROR
+  originalName  String
+  fileHash      String
+  detectedFormat String?
+  rowsTotal     Int      @default(0)
+  rowsImported  Int      @default(0)
+  rowsFailed    Int      @default(0)
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  org          Org               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  transactions BankTransaction[]
+
+  @@index([orgId])
+  @@index([fileHash])
+}
+
+model BankTransaction {
+  id               String   @id @default(cuid())
+  orgId            String
+  importId         String?
+  documentId       String?
+  matchedInvoiceId String?
+
+  bookingDate      DateTime
+  valueDate        DateTime?
+  labelRaw         String
+  labelNormalized  String
+  merchantName     String?
+  reference        String?
+
+  amountTTC        Decimal  @db.Decimal(15, 4)
+  amountHT         Decimal? @db.Decimal(15, 4)
+  vatAmount        Decimal? @db.Decimal(15, 4)
+  currency         String   @default("EUR")
+
+  type                 String   @default("UNKNOWN") // INCOME | EXPENSE | TRANSFER | UNKNOWN
+  category             String?
+  accountingAccount    String?
+  deductiblePercentage Decimal? @db.Decimal(5, 2)
+
+  vatType           String   @default("UNKNOWN") // DEDUCTIBLE | NON_DEDUCTIBLE | COLLECTED | REVERSE_CHARGE | EXEMPT | MIXED | UNKNOWN
+  vatSource         String?  // INTERNAL_RULE | AI_SUGGESTION | BANK_FILE | INVOICE_OCR | USER_CONFIRMED | AUTO_LEARNED
+  vatConfidence     Decimal  @db.Decimal(5, 4) @default(0)
+  vatNeedsReview    Boolean  @default(true)
+
+  userValidatedAt  DateTime?
+  metadata         Json?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  org              Org              @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  import           FinancialImport? @relation(fields: [importId], references: [id])
+  document         Document?        @relation("BankTransactionDocument", fields: [documentId], references: [id])
+  matchedInvoice   ExtractedInvoice? @relation(fields: [matchedInvoiceId], references: [id])
+
+  @@index([orgId])
+  @@index([importId])
+  @@index([bookingDate])
+  @@index([vatNeedsReview])
+}
+
+model ExtractedInvoice {
+  id                  String   @id @default(cuid())
+  orgId               String
+  documentId          String?
+
+  supplierName        String?
+  invoiceNumber       String?
+  invoiceDate         DateTime?
+
+  totalHT             Decimal? @db.Decimal(15, 4)
+  totalVat            Decimal? @db.Decimal(15, 4)
+  totalTTC            Decimal? @db.Decimal(15, 4)
+
+  extractionConfidence Decimal @db.Decimal(5, 4) @default(0.25)
+  needsReview         Boolean  @default(true)
+  rawText             String?
+  metadata            Json?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  org                 Org      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  vatLines            ExtractedInvoiceVatLine[]
+  bankTransactions    BankTransaction[]
+
+  @@index([orgId])
+}
+
+model ExtractedInvoiceVatLine {
+  id                  String   @id @default(cuid())
+  invoiceId           String
+
+  vatRate             Decimal  @db.Decimal(5, 2)
+  amountHT            Decimal  @db.Decimal(15, 4)
+  vatAmount           Decimal  @db.Decimal(15, 4)
+  amountTTC           Decimal  @db.Decimal(15, 4)
+
+  vatType             String   @default("UNKNOWN")
+  confidenceScore     Decimal  @db.Decimal(5, 4) @default(0.25)
+  deductiblePercentage Decimal? @db.Decimal(5, 2)
+  accountingVatAccount String?
+  reason              String?
+
+  invoice             ExtractedInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model VatLearningRule {
+  id                   String    @id @default(cuid())
+  orgId                String
+  merchantName         String?
+  itemName             String?
+  normalizedKey        String
+  vatType              String
+  vatRate              Decimal?  @db.Decimal(5, 2)
+  accountingAccount    String?
+  deductiblePercentage Decimal?  @db.Decimal(5, 2)
+  confirmationsCount   Int       @default(1)
+  confidenceScore      Decimal   @db.Decimal(5, 4) @default(0.45)
+  appliesAutomatically Boolean   @default(false)
+  validatedByUserId    String?
+  lastConfirmedAt      DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  org                  Org       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, normalizedKey, vatType])
+  @@index([orgId])
+  @@index([merchantName])
+}
+
+model OrgActivityProfile {
+  id                 String    @id @default(cuid())
+  orgId              String
+  nafCode            String?
+  naceCode           String?
+  activityLabel      String
+  objectSocial       String?
+  userConfirmedLabel String?
+  status             String    @default("SUGGESTED") // SUGGESTED | USER_VALIDATED | ACCOUNTANT_VALIDATED
+  confidenceScore    Decimal   @db.Decimal(5, 4) @default(0.5)
+  validatedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  org                Org       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([status])
 }
 
 // ════════════════════════════════════════════════════════════════════════════

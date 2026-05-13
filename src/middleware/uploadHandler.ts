@@ -19,6 +19,13 @@ const ALLOWED_TYPES: Record<string, string[]> = {
   "application/vnd.ms-excel":                 [".xls"],
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
   "text/csv":                                 [".csv"],
+  // Formats bancaires
+  "text/plain":                               [".txt", ".mt940", ".sta", ".cfonb", ".camt", ".ofx", ".qif"],
+  "application/xml":                          [".xml"],
+  "text/xml":                                 [".xml"],
+  "application/x-ofx":                       [".ofx", ".qbo"],
+  "application/vnd.intu.qbo":                [".qbo"],
+  "application/x-qif":                       [".qif"],
 };
 
 // ─── CRÉER LE DOSSIER UPLOAD SI INEXISTANT ───────────────────────────────────
@@ -46,16 +53,18 @@ function fileFilter(
   file: Express.Multer.File,
   cb: FileFilterCallback,
 ) {
+  const BANK_EXTENSIONS = [".csv", ".xls", ".xlsx", ".ofx", ".qbo", ".qif", ".xml", ".mt940", ".sta", ".cfonb", ".txt", ".camt"];
   const mimeAllowed = file.mimetype in ALLOWED_TYPES;
   const ext         = path.extname(file.originalname).toLowerCase();
-  const extAllowed  = mimeAllowed && ALLOWED_TYPES[file.mimetype].includes(ext);
+  // For bank file imports, allow by extension even if MIME type is generic text/plain
+  const extAllowed  = mimeAllowed && ALLOWED_TYPES[file.mimetype].includes(ext)
+    || (BANK_EXTENSIONS.includes(ext) && (file.mimetype.startsWith("text/") || file.mimetype === "application/xml" || file.mimetype === "application/octet-stream"));
 
-  // Double vérification MIME + extension — évite l'upload de fichiers déguisés
-  if (!mimeAllowed || !extAllowed) {
+  if (!mimeAllowed && !extAllowed) {
     return cb(
       new AppError(
         "INVALID_FILE_TYPE",
-        `Type de fichier non autorisé. Types acceptés : PDF, JPEG, PNG, WEBP, Excel, CSV.`,
+        `Type de fichier non autorisé. Types acceptés : PDF, JPEG, PNG, WEBP, Excel, CSV, OFX, QIF, CAMT, MT940, CFONB.`,
         400,
       ),
     );
