@@ -3,8 +3,9 @@ import path from "path";
 import crypto from "crypto";
 import { prisma } from "../../lib/prisma.js";
 import { deleteLocalFile } from "../../middleware/uploadHandler.js";
-import { normalizeText, parseMoney } from "./normalization.js";
+import { normalizeText } from "./normalization.js";
 import { suggestVatQualification } from "./vatEngine.js";
+import { extractReceiptData } from "./ocrService.js";
 
 type ReceiptLifecycleInput = {
   orgId: string;
@@ -13,35 +14,6 @@ type ReceiptLifecycleInput = {
   files: Express.Multer.File[];
   notes?: string;
 };
-
-const moneyFromText = (text: string, labels: string[]) => {
-  const normalized = text.replace(/\s+/g, " ");
-  for (const label of labels) {
-    const regex = new RegExp(`${label}[^0-9-]*([0-9]+(?:[\\s.,][0-9]{2})?)`, "i");
-    const found = normalized.match(regex)?.[1];
-    const parsed = parseMoney(found);
-    if (parsed !== null) return parsed;
-  }
-  return null;
-};
-
-function extractStubFromReceipt(files: Express.Multer.File[]) {
-  // Remplace ce stub par Tesseract/OpenAI Vision/Google Document AI.
-  // Le cycle de vie est déjà sécurisé : toute donnée OCR créée est supprimée ou remplacée avec le justificatif.
-  const names = files.map((f) => f.originalname).join(" ");
-  const rawText = `OCR_PENDING ${names}`;
-  return {
-    supplierName: normalizeText(names).split(" ").slice(0, 3).join(" ") || "Fournisseur à confirmer",
-    invoiceNumber: undefined as string | undefined,
-    invoiceDate: undefined as Date | undefined,
-    totalHT: moneyFromText(rawText, ["HT", "TOTAL HT"]),
-    totalVat: moneyFromText(rawText, ["TVA", "VAT"]),
-    totalTTC: moneyFromText(rawText, ["TTC", "TOTAL"]),
-    rawText,
-    confidence: 0.25,
-    vatLines: [] as Array<{ vatRate: number; amountHT: number; vatAmount: number; amountTTC: number }>,
-  };
-}
 
 async function createReceiptDocument(input: ReceiptLifecycleInput, tx: any) {
   const hash = crypto.createHash("sha256");
@@ -137,7 +109,29 @@ export async function attachReceiptToTransaction(input: ReceiptLifecycleInput) {
   if (tx.documentId || tx.matchedInvoiceId) await clearReceiptData({ orgId: input.orgId, transactionId: input.transactionId });
 
   const { document, documentMetadata } = await createReceiptDocument(input, tx);
-  const extracted = extractStubFromReceipt(input.files);
+
+  // Run OCR on all pages, merge text
+  const ocrResults = await Promise.all(
+    input.files.map((f) => {
+      const buf = fs.readFileSync(f.path);
+      return extractReceiptData(buf, f.mimetype);
+    })
+  );
+  const bestOcr = ocrResults.reduce((best, r) => r.confidence > best.confidence ? r : best, ocrResults[0]);
+  const mergedText = ocrResults.map((r) => r.rawText).join("\n");
+
+  const extracted = {
+    supplierName: bestOcr.supplierName ?? (normalizeText(input.files[0].originalname).split(" ").slice(0, 3).join(" ") || "Fournisseur à confirmer"),
+    invoiceNumber: bestOcr.invoiceNumber,
+    invoiceDate: bestOcr.invoiceDate,
+    totalHT: bestOcr.totalHT ?? null,
+    totalVat: bestOcr.totalVat ?? null,
+    totalTTC: bestOcr.totalTTC ?? null,
+    rawText: mergedText || `OCR_PENDING ${input.files.map((f) => f.originalname).join(" ")}`,
+    confidence: bestOcr.confidence,
+    vatLines: bestOcr.vatLines,
+  };
+
   const totalTTC = extracted.totalTTC ?? Math.abs(Number(tx.amountTTC));
 
   const suggestion = await suggestVatQualification({
@@ -190,7 +184,7 @@ export async function attachReceiptToTransaction(input: ReceiptLifecycleInput) {
       vatNeedsReview: true,
       accountingAccount: suggestion.accountingAccount,
       deductiblePercentage: suggestion.deductiblePercentage as any,
-      metadata: { ...(typeof tx.metadata === "object" && tx.metadata ? tx.metadata : {}), receipt: { documentId: document.id, invoiceId: invoice.id, ...documentMetadata, status: "ATTACHED_NEEDS_REVIEW" } },
+      metadata: { ...(typeof tx.metadata === "object" && tx.metadata ? tx.metadata : {}), receipt: { documentId: document.id, invoiceId: invoice.id, ...documentMetadata, status: "ATTACHED_NEEDS_REVIEW", ocrConfidence: extracted.confidence, documentType: bestOcr.documentType } },
     },
   });
 
