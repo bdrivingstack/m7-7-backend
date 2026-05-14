@@ -13,6 +13,7 @@ import { parseQif } from "../services/accounting-intelligence/qifParser.js";
 import { parseCamt053 } from "../services/accounting-intelligence/camt053Parser.js";
 import { parseMt940 } from "../services/accounting-intelligence/mt940Parser.js";
 import { parseCfonb120 } from "../services/accounting-intelligence/cfonb120Parser.js";
+import { parsePdf } from "../services/accounting-intelligence/pdfParser.js";
 import { normalizeText, parseFrenchDate, parseMoney } from "../services/accounting-intelligence/normalization.js";
 import { suggestVatQualification, reinforceVatLearningRule } from "../services/accounting-intelligence/vatEngine.js";
 import { suggestActivityProfile } from "../services/accounting-intelligence/activityEngine.js";
@@ -26,7 +27,7 @@ accountingIntelligenceRouter.use(authenticate);
 
 type ParseResult = { rows: CsvRow[]; headers: string[]; source: string; detectedFormat: string };
 
-function detectAndParse(buffer: Buffer, originalName: string): ParseResult {
+async function detectAndParse(buffer: Buffer, originalName: string): Promise<ParseResult> {
   const ext = path.extname(originalName).toLowerCase();
   const textPreview = buffer.slice(0, 500).toString("utf8").replace(/[^\x20-\x7E\n\r\t]/g, "");
 
@@ -53,6 +54,14 @@ function detectAndParse(buffer: Buffer, originalName: string): ParseResult {
   if (ext === ".cfonb" || (ext === ".txt" && buffer.length > 0 && buffer.slice(0, 2).toString("ascii").match(/^0[4-8]/))) {
     const result = parseCfonb120(buffer);
     return { ...result, source: "BANK_CFONB120", detectedFormat: "CFONB120" };
+  }
+  // PDF: check magic bytes (%PDF) or extension
+  if (ext === ".pdf" || buffer.slice(0, 4).toString("ascii") === "%PDF") {
+    const result = await parsePdf(buffer);
+    if (result.rows.length === 0) {
+      throw new Error("Le PDF ne contient pas de texte lisible. S'il s'agit d'un scan, exportez d'abord un relevé au format CSV depuis votre espace bancaire.");
+    }
+    return { ...result, source: "BANK_PDF", detectedFormat: "PDF" };
   }
   // Default: CSV (also handles .csv with any separator)
   const result = parseCsv(buffer);
@@ -345,7 +354,7 @@ accountingIntelligenceRouter.post("/imports/bank-multi", uploadSingle, async (re
     const buffer = fs.readFileSync(req.file.path);
     const hash = crypto.createHash("sha256").update(buffer).digest("hex");
 
-    const { rows, source, detectedFormat } = detectAndParse(buffer, req.file.originalname);
+    const { rows, source, detectedFormat } = await detectAndParse(buffer, req.file.originalname);
     const activity = await getPrimaryActivity(req.user.orgId);
 
     const document = await prisma.document.create({ data: {
@@ -446,7 +455,7 @@ accountingIntelligenceRouter.post("/imports/preview", uploadSingle, async (req, 
   try {
     if (!req.file) throw new Error("Aucun fichier reçu.");
     const buffer = fs.readFileSync(req.file.path);
-    const { rows, headers, source, detectedFormat } = detectAndParse(buffer, req.file.originalname);
+    const { rows, headers, source, detectedFormat } = await detectAndParse(buffer, req.file.originalname);
     deleteLocalFile(req.file.path);
 
     const preview = rows.slice(0, 10).map((row) => {
