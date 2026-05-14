@@ -1,4 +1,4 @@
-import pdfParse from "pdf-parse";
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import type { CsvRow } from "./csvParser.js";
 
 // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY at start of line
