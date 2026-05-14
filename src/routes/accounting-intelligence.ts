@@ -18,7 +18,8 @@ import { normalizeText, parseFrenchDate, parseMoney } from "../services/accounti
 import { suggestVatQualification, reinforceVatLearningRule } from "../services/accounting-intelligence/vatEngine.js";
 import { suggestActivityProfile } from "../services/accounting-intelligence/activityEngine.js";
 import { attachReceiptToTransaction, deleteReceiptFromTransaction, replaceReceiptOnTransaction } from "../services/accounting-intelligence/receiptLifecycle.js";
-import { extractReceiptData } from "../services/accounting-intelligence/ocrService.js";
+import { callScanAi } from "../services/scan-ai.service.js";
+import { scanUpload } from "../utils/uploadScan.js";
 import type { CsvRow } from "../services/accounting-intelligence/csvParser.js";
 
 export const accountingIntelligenceRouter = Router();
@@ -450,136 +451,163 @@ accountingIntelligenceRouter.post("/imports/bank-multi", uploadSingle, async (re
   }
 });
 
-// ─── Import par scan / photo (OCR → BankTransaction) ─────────────────────────
+// ─── Import par scan / photo (scan-ai → PDF nettoyé → BankTransaction) ──────
 
-accountingIntelligenceRouter.post("/imports/scan", uploadMultiple, async (req, res, next) => {
+accountingIntelligenceRouter.post("/imports/scan", scanUpload.array("files", 10), async (req, res, next) => {
+  const uploadDir = process.env.UPLOAD_DIR ?? "./uploads";
+  let savedPdfPath: string | null = null;
+
   try {
     const files = (req.files ?? []) as Express.Multer.File[];
-    if (!files.length) throw new Error("Aucun fichier reçu.");
-
-    // OCR sur toutes les pages, on garde le meilleur résultat
-    const ocrResults = await Promise.all(
-      files.map((f) => extractReceiptData(fs.readFileSync(f.path), f.mimetype))
-    );
-    const best = ocrResults.reduce((a, b) => b.confidence > a.confidence ? b : a, ocrResults[0]);
-    const mergedText = ocrResults.map((r) => r.rawText).join("\n");
-
-    // Sens de l'opération : corps de la requête peut forcer "INCOME" ou "EXPENSE"
     const operationType = (req.body?.operationType === "INCOME" ? "INCOME" : "EXPENSE") as "INCOME" | "EXPENSE";
-    const rawAmt = best.totalTTC ?? null;
-    const amountTTC = rawAmt !== null
-      ? (operationType === "INCOME" ? Math.abs(rawAmt) : -Math.abs(rawAmt))
-      : (operationType === "INCOME" ? 0 : 0);
 
-    const bookingDate = best.invoiceDate ?? new Date();
-    const label = best.supplierName ?? "Document scanné";
+    if (!files.length) {
+      return res.status(400).json({ message: "Aucun document reçu" });
+    }
+
+    const scan = await callScanAi(files);
+
+    if (!scan.ok) {
+      return res.status(422).json({ message: "Document non exploitable", warnings: scan.warnings });
+    }
+
+    // Save only the cleaned PDF — never the raw scan files
+    const pdfBuffer = Buffer.from(scan.pdf_base64, "base64");
+    const randomName = crypto.randomBytes(32).toString("hex");
+    const pdfFilename = `${randomName}.pdf`;
+    savedPdfPath = path.join(uploadDir, pdfFilename);
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    fs.writeFileSync(savedPdfPath, pdfBuffer);
+
+    const checksum = crypto.createHash("sha256").update(pdfBuffer).digest("hex");
+
+    const document = await prisma.document.create({
+      data: {
+        orgId: req.user.orgId,
+        name: pdfFilename,
+        originalName: `scan-${Date.now()}-${files.length}pages.pdf`,
+        mimeType: "application/pdf",
+        size: pdfBuffer.length,
+        storagePath: savedPdfPath,
+        url: `/uploads/${pdfFilename}`,
+        checksum,
+        category: "invoice_scan",
+        tags: ["scan", "ocr", scan.document_type],
+        uploadedById: req.user.id,
+      },
+    });
+
+    const extractedDate = scan.extracted.date ?? null;
+    const extractedMerchant = scan.extracted.merchant ?? null;
+    const extractedTTC = scan.extracted.amount_ttc ?? null;
+
+    const financialImport = await (prisma as any).financialImport.create({
+      data: {
+        orgId: req.user.orgId,
+        documentId: document.id,
+        source: "SCAN_OCR",
+        status: scan.ocr_confidence < 0.6 ? "NEEDS_REVIEW" : "PARSED",
+        originalName: files[0].originalname,
+        fileHash: checksum,
+        detectedFormat: "SCAN_AI",
+        rowsTotal: 1,
+        rowsImported: extractedTTC != null ? 1 : 0,
+        rowsFailed: extractedTTC != null ? 0 : 1,
+        metadata: {
+          ocrConfidence: scan.ocr_confidence,
+          documentType: scan.document_type,
+          pages: files.length,
+          warnings: scan.warnings,
+        },
+      },
+    });
+
+    const invoice = await (prisma as any).extractedInvoice.create({
+      data: {
+        orgId: req.user.orgId,
+        documentId: document.id,
+        supplierName: extractedMerchant,
+        invoiceDate: extractedDate ? new Date(extractedDate) : null,
+        totalHT: scan.extracted.amount_ht as any,
+        totalVat: scan.extracted.vat_amount as any,
+        totalTTC: extractedTTC as any,
+        extractionConfidence: scan.ocr_confidence as any,
+        needsReview: scan.ocr_confidence < 0.65 || extractedTTC == null,
+        rawText: scan.ocr_text,
+        metadata: {
+          source: "scan_ai",
+          documentType: scan.document_type,
+          pages: files.length,
+          warnings: scan.warnings,
+        },
+      },
+    });
+
+    const amountTTC = extractedTTC !== null
+      ? (operationType === "INCOME" ? Math.abs(extractedTTC) : -Math.abs(extractedTTC))
+      : 0;
 
     const activity = await getPrimaryActivity(req.user.orgId);
     const suggestion = await suggestVatQualification({
       orgId: req.user.orgId,
       activityLabel: activity?.userConfirmedLabel ?? activity?.activityLabel,
-      merchantName: best.supplierName,
-      label,
+      merchantName: extractedMerchant ?? undefined,
+      label: extractedMerchant ?? "Document scanné",
       amountTTC,
-      vatAmountImported: best.totalVat ?? undefined,
+      vatAmountImported: scan.extracted.vat_amount ?? undefined,
+      vatRateImported: scan.extracted.vat_rate ?? undefined,
       operationType,
     });
 
-    // Stocker le document
-    const hash = crypto.createHash("sha256");
-    for (const f of files) hash.update(fs.readFileSync(f.path));
-    const checksum = hash.digest("hex");
-
-    const primaryFile = files[0];
-    const document = await prisma.document.create({ data: {
-      orgId: req.user.orgId,
-      name: primaryFile.filename,
-      originalName: files.length > 1 ? `scan-${Date.now()}-${files.length}pages` : primaryFile.originalname,
-      mimeType: files.length > 1 ? "application/pdf" : primaryFile.mimetype,
-      size: files.reduce((s, f) => s + f.size, 0),
-      storagePath: primaryFile.path,
-      url: `/uploads/${path.basename(primaryFile.path)}`,
-      checksum,
-      category: "invoice_scan",
-      tags: ["scan", "ocr", best.documentType],
-      uploadedById: req.user.id,
-    }});
-
-    const financialImport = await (prisma as any).financialImport.create({ data: {
-      orgId: req.user.orgId,
-      documentId: document.id,
-      source: "SCAN_OCR",
-      status: "PARSED",
-      originalName: primaryFile.originalname,
-      fileHash: checksum,
-      detectedFormat: "SCAN",
-      rowsTotal: 1,
-      rowsImported: rawAmt !== null ? 1 : 0,
-      rowsFailed: rawAmt !== null ? 0 : 1,
-      metadata: { ocrConfidence: best.confidence, documentType: best.documentType, pages: files.length },
-    }});
-
-    // Créer l'opération bancaire
-    const invoice = await (prisma as any).extractedInvoice.create({ data: {
-      orgId: req.user.orgId,
-      documentId: document.id,
-      supplierName: best.supplierName,
-      invoiceNumber: best.invoiceNumber,
-      invoiceDate: best.invoiceDate,
-      totalHT: best.totalHT as any,
-      totalVat: best.totalVat as any,
-      totalTTC: rawAmt as any,
-      extractionConfidence: best.confidence as any,
-      needsReview: best.confidence < 0.6,
-      rawText: mergedText,
-      metadata: { source: "scan_import", documentType: best.documentType, pages: files.length },
-    }});
-
-    const tx = await (prisma as any).bankTransaction.create({ data: {
-      orgId: req.user.orgId,
-      importId: financialImport.id,
-      documentId: document.id,
-      matchedInvoiceId: invoice.id,
-      bookingDate,
-      labelRaw: label,
-      labelNormalized: normalizeText(label),
-      merchantName: best.supplierName ?? normalizeText(label).split(" ").slice(0, 3).join(" "),
-      amountTTC: amountTTC as any,
-      amountHT: best.totalHT as any,
-      vatAmount: best.totalVat as any,
-      currency: "EUR",
-      type: operationType,
-      vatType: suggestion.vatType as any,
-      vatSource: "INVOICE_OCR" as any,
-      vatConfidence: Math.max(best.confidence, suggestion.confidenceScore) as any,
-      vatNeedsReview: best.confidence < 0.6 || suggestion.needsReview,
-      accountingAccount: suggestion.accountingAccount,
-      deductiblePercentage: suggestion.deductiblePercentage as any,
-      metadata: {
-        importFormat: "SCAN",
-        vatReason: suggestion.reason,
-        ocrConfidence: best.confidence,
-        documentType: best.documentType,
-        receipt: { documentId: document.id, invoiceId: invoice.id, status: "SCAN_IMPORT", pages: files.length },
-      },
-    }});
-
-    for (const f of files) deleteLocalFile(f.path);
-
-    res.status(201).json({
+    const tx = await (prisma as any).bankTransaction.create({
       data: {
-        transaction: tx,
-        invoice,
-        document,
-        ocrConfidence: best.confidence,
-        extractedDate: best.invoiceDate,
-        extractedMerchant: best.supplierName,
-        extractedTTC: rawAmt,
-        documentType: best.documentType,
+        orgId: req.user.orgId,
+        importId: financialImport.id,
+        documentId: document.id,
+        matchedInvoiceId: invoice.id,
+        bookingDate: extractedDate ? new Date(extractedDate) : new Date(),
+        labelRaw: extractedMerchant ?? "Document scanné",
+        labelNormalized: normalizeText(extractedMerchant ?? "Document scanné"),
+        merchantName: extractedMerchant ?? undefined,
+        amountTTC: amountTTC as any,
+        amountHT: scan.extracted.amount_ht as any,
+        vatAmount: scan.extracted.vat_amount as any,
+        currency: "EUR",
+        type: operationType,
+        vatType: suggestion.vatType as any,
+        vatSource: "INVOICE_OCR" as any,
+        vatConfidence: Math.max(scan.ocr_confidence, suggestion.confidenceScore) as any,
+        vatNeedsReview: scan.ocr_confidence < 0.65 || suggestion.needsReview,
+        accountingAccount: suggestion.accountingAccount,
+        deductiblePercentage: suggestion.deductiblePercentage as any,
+        metadata: {
+          importFormat: "SCAN_AI",
+          vatReason: suggestion.reason,
+          ocrConfidence: scan.ocr_confidence,
+          documentType: scan.document_type,
+          receipt: { documentId: document.id, invoiceId: invoice.id, status: "SCAN_IMPORT", pages: files.length },
+        },
       },
     });
-  } catch (err) {
-    for (const f of ((req.files ?? []) as Express.Multer.File[])) deleteLocalFile(f.path);
+
+    return res.status(201).json({
+      data: {
+        documentType: scan.document_type,
+        ocrConfidence: scan.ocr_confidence,
+        extractedDate,
+        extractedMerchant,
+        extractedTTC,
+        extractedHT: scan.extracted.amount_ht,
+        vatAmount: scan.extracted.vat_amount,
+        vatRate: scan.extracted.vat_rate,
+        warnings: scan.warnings,
+        pages: scan.pages,
+        previewPdfBase64: scan.pdf_base64,
+        transaction: tx,
+      },
+    });
+  } catch (err: any) {
+    if (savedPdfPath) deleteLocalFile(savedPdfPath);
     next(err);
   }
 });
